@@ -1,0 +1,4 @@
+| ant debug
+
+# | adb install -r bin/Messy-debug.apk
+# < bin/Messy-debug.apk
