@@ -13,5 +13,13 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity
+            android:name="org.abridgegame.messy.DisplayMessageActivity"
+            android:label="@string/title_activity_display_message"
+            android:parentActivityName="org.abridgegame.messy.Messy" >
+          <meta-data
+              android:name="android.support.PARENT_ACTIVITY"
+              android:value="org.abridgegame.messy.Messy" />
+        </activity>
     </application>
 </manifest>
