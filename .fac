@@ -1,4 +1,7 @@
 | ant debug
+c ~
+c #
+c local.properties
 
 # | adb install -r bin/Messy-debug.apk
 # < bin/Messy-debug.apk

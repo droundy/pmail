@@ -9,9 +9,21 @@
     android:layout_height="wrap_content"
     android:text="Hello World, you are awesome!"
     />
+<LinearLayout
+    android:orientation="horizontal"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    >
 <EditText android:id="@+id/edit_message"
-    android:layout_width="wrap_content"
+    android:layout_weight="1"
+    android:layout_width="0dp"
     android:layout_height="wrap_content"
     android:hint="@string/edit_message" />
+<Button
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:text="@string/button_send"
+    android:onClick="sendMessage" />
+</LinearLayout>
 </LinearLayout>
 
