@@ -1,3 +1,6 @@
 *.fac.tum
 *~
 local.properties
+build
+.gradle
+*.png

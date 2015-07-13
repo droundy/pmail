@@ -1,7 +1,28 @@
-| ant debug
+| ./gradlew build
 c ~
 c #
 c local.properties
+C .gradle
+C build/intermediates
+C ~/.gradle
+
+| mkdir -p res/drawable-ldpi && inkscape -d 67.5 -e res/drawable-ldpi/ic_launcher.png res/drawable-svg/ic_launcher.svg
+c .log
+
+| mkdir -p res/drawable-mdpi && inkscape -d 90 -e res/drawable-mdpi/ic_launcher.png res/drawable-svg/ic_launcher.svg
+c .log
+
+| mkdir -p res/drawable-hdpi && inkscape -d 120 -e res/drawable-hdpi/ic_launcher.png res/drawable-svg/ic_launcher.svg
+c .log
+
+| mkdir -p res/drawable-xhdpi && inkscape -d 180 -e res/drawable-xhdpi/ic_launcher.png res/drawable-svg/ic_launcher.svg
+c .log
+
+| mkdir -p res/drawable-xxhdpi && inkscape -d 270 -e res/drawable-xxhdpi/ic_launcher.png res/drawable-svg/ic_launcher.svg
+c .log
+
+| mkdir -p res/drawable-xxxhdpi && inkscape -d 360 -e res/drawable-xxxhdpi/ic_launcher.png res/drawable-svg/ic_launcher.svg
+c .log
 
 # | adb install -r bin/Messy-debug.apk
 # < bin/Messy-debug.apk

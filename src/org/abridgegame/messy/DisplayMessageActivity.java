@@ -17,7 +17,7 @@ public class DisplayMessageActivity extends Activity {
         String message = intent.getStringExtra(Messy.EXTRA_MESSAGE);
 
         TextView textView = new TextView(this);
-        textView.setTextSize(40);
+        //textView.setTextSize(40);
         textView.setText(message);
 
         setContentView(textView);
