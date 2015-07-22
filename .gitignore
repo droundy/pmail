@@ -4,3 +4,8 @@ local.properties
 build
 .gradle
 *.png
+
+*.aux
+*.log
+*.pdf
+*Notes.bib
