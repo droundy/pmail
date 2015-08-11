@@ -5,6 +5,7 @@ c local.properties
 C .gradle
 C build/intermediates
 C ~/.gradle
+C target
 
 | mkdir -p res/drawable-ldpi && inkscape -d 67.5 -e res/drawable-ldpi/ic_launcher.png res/drawable-svg/ic_launcher.svg
 c .log
@@ -26,3 +27,15 @@ c .log
 
 # | adb install -r bin/Messy-debug.apk
 # < bin/Messy-debug.apk
+
+| cargo doc && cargo build && cargo test
+c ~
+c #
+c .tum
+C src
+c local.properties
+C .gradle
+C build
+C ~/.cargo
+C target/debug/.fingerprint
+C target/release/.fingerprint
