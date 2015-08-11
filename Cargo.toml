@@ -5,7 +5,6 @@ authors = ["David Roundy <roundyd@physics.oregonstate.edu>"]
 
 license = "GPLv3"
 
-
 [lib]
 name = "pmail"
 path = "rust/lib.rs"

@@ -1,9 +1,11 @@
+#![deny(warnings)]
+
 extern crate onionsalt;
 
 use std::net::UdpSocket;
 use std::net::SocketAddr;
 use onionsalt::crypto;
-use onionsalt::crypto::{ToPublicKey, ToSecretKey, ToNonce};
+use onionsalt::crypto::{ToPublicKey};
 use std::io::Error;
 use std::sync::mpsc::{Sender, Receiver, channel};
 use std::thread;
@@ -84,7 +86,7 @@ pub fn listen()
         }
     });
     thread::spawn(move|| {
-        use onionsalt::crypto::{ToPublicKey, ToSecretKey, ToNonce};
+        use onionsalt::crypto::{ToPublicKey};
         // This is the receiver of messages.  It listens on the
         // socket, and decrypts messages with the ephemeral session
         // key prior to forwarding the contents on through the
@@ -97,7 +99,12 @@ pub fn listen()
             if amt == PACKET_SIZE {
                 println!("I got a packet from {}", src);
                 let they = (&buf[0..32]).to_public_key().unwrap();
-                tr.send(Address{ ip: src, key: they });
+                if let Err(e) = tr.send(Address{ ip: src, key: they }) {
+                    // When noone is listending for messages, we may
+                    // as well shut down our listener.
+                    println!("Quitting now because {:?}", e);
+                    return;
+                }
             } else {
                 println!("A packet of a strange size {}", amt);
             }
