@@ -39,3 +39,4 @@ C build
 C ~/.cargo
 C target/debug/.fingerprint
 C target/release/.fingerprint
+C .git
