@@ -9,3 +9,5 @@ build
 *.log
 *.pdf
 *Notes.bib
+*.lock
+target
