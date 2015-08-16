@@ -38,5 +38,7 @@ C .gradle
 C build
 C ~/.cargo
 C target/debug/.fingerprint
+C target/debug/deps
 C target/release/.fingerprint
+C target/release/deps
 C .git

@@ -10,7 +10,7 @@ use std::io::Error;
 use std::sync::mpsc::{Sender, Receiver, channel};
 use std::thread;
 
-pub const PACKET_SIZE: usize = 512;
+use onionsalt::{PACKET_LENGTH};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Address {
@@ -91,16 +91,16 @@ pub fn listen()
         // socket, and decrypts messages with the ephemeral session
         // key prior to forwarding the contents on through the
         // channel.
-        let mut buf = [0; PACKET_SIZE];
+        let mut buf = [0; PACKET_LENGTH];
         loop {
             // We assume that when we fail on a receive, the socket must
             // have gone down, and we should exit this thread.
             let (amt, src) = socket.recv_from(&mut buf).unwrap();
-            if amt == PACKET_SIZE {
+            if amt == PACKET_LENGTH {
                 println!("I got a packet from {}", src);
                 let they = (&buf[0..32]).to_public_key().unwrap();
                 if let Err(e) = tr.send(Address{ ip: src, key: they }) {
-                    // When noone is listending for messages, we may
+                    // When no one is listending for messages, we may
                     // as well shut down our listener.
                     println!("Quitting now because {:?}", e);
                     return;
