@@ -32,11 +32,13 @@ c .log
 c ~
 c #
 c .tum
-C src
 c local.properties
+C src
 C .gradle
 C build
 C ~/.cargo
+C target/debug/pmail-
+C target/release/pmail-
 C target/debug/.fingerprint
 C target/debug/deps
 C target/release/.fingerprint
