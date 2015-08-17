@@ -15,6 +15,8 @@ use std::thread;
 
 pub use onionsalt::{PACKET_LENGTH};
 
+pub const PORT: u16 = 54321;
+
 #[derive(Copy)]
 pub struct RawEncryptedMessage {
     pub ip: SocketAddr,
@@ -44,16 +46,19 @@ impl Debug for RawEncryptedMessage {
 pub fn listen() -> Result<(Sender<RawEncryptedMessage>,
                            Receiver<RawEncryptedMessage>,
                            SocketAddr), Error> {
-    let port: u16 = 54321;
     // Create the socket we will use for all communications.  If we
     // can bind to ipv6, we will only use ipv6 for listening. I'm not
     // sure if this is wise, but it seems best not to listen on both
     // protocols...
-    let socket = match UdpSocket::bind(("::", port)) {
+
+    // On ipv6 we only bind to the default port, since we presume that
+    // NAT isn't needed on ipv6, and don't want to store yet more
+    // routing bytes.
+    let socket = match UdpSocket::bind(("::", PORT)) {
         Ok(s) => s,
         _ => {
-            println!("Attempting to bind to ipv4 port...");
-            match UdpSocket::bind(("0.0.0.0", port)) {
+            println!("Attempting to bind to ipv4...");
+            match UdpSocket::bind(("0.0.0.0", PORT)) {
                 Ok(s) => s,
                 _ => try!(UdpSocket::bind(("0.0.0.0", 0))) // any port in a storm
             }

@@ -3,6 +3,7 @@
 extern crate onionsalt;
 
 pub mod udp;
+pub mod dht;
 
 pub use udp::{PACKET_LENGTH};
 

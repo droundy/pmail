@@ -11,3 +11,5 @@ path = "rust/lib.rs"
 
 [dependencies]
 onionsalt = { version = "*", git = "https://github.com/droundy/onionsalt" }
+
+time = "0.1"

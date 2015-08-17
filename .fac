@@ -41,6 +41,8 @@ C target/debug/pmail-
 C target/release/pmail-
 C target/debug/.fingerprint
 C target/debug/deps
+C target/debug/build
 C target/release/.fingerprint
 C target/release/deps
+C target/release/build
 C .git
