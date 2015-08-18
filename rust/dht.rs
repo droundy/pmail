@@ -2,8 +2,14 @@ extern crate time;
 
 use std::net::SocketAddr;
 use onionsalt::ROUTING_LENGTH;
+use onionsalt::crypto;
+use std::io::Error;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+use super::udp;
+
+use std::collections::HashMap;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Addr {
     V6 {addr: [u16; 8],
         port: u16,
@@ -36,6 +42,18 @@ pub struct RoutingInfo {
     eta: u32,
     /// The payload is for us!  Wheee!
     is_for_me: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum MessageType {
+    Greetings,
+    Query(crypto::PublicKey),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Message {
+    pub from: crypto::PublicKey,
+    pub mtype: MessageType,
 }
 
 ///
@@ -115,4 +133,19 @@ impl RoutingInfo {
             ip: addr,
         })
     }
+}
+
+pub fn start() -> Result<(), Error> {
+    let mut addresses = HashMap::new();
+    let mut pubkeys = HashMap::new();
+
+    let bingley_addr = Addr::V4{ addr: [128,193,96,51], port: udp::PORT };
+    let bingley_key = crypto::PublicKey([0;32]);
+    addresses.insert(bingley_key, bingley_addr);
+    pubkeys.insert(bingley_addr, bingley_key);
+
+    let (_lopriority, _send, _get, _) = try!(udp::listen());
+
+    // lopriority.send();
+    Ok(())
 }
