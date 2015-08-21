@@ -43,6 +43,10 @@ pub struct RoutingInfo {
     eta: u32,
     /// The payload is for us!  Wheee!
     is_for_me: bool,
+    /// Just respond to the sender of this packet with his address.
+    /// This is needed for a node to find out its port, if it happens
+    /// to be passing through a NAT.
+    who_am_i: bool,
 }
 
 /// When we ask for addresses, we only get `NUM_IN_RESPONSE`, since
@@ -95,12 +99,16 @@ impl RoutingInfo {
             ip: Addr::from(&saddr),
             eta: eta,
             is_for_me: false,
+            who_am_i: false,
         }
     }
     pub fn bytes(&self) -> [u8; ROUTING_LENGTH] {
         let mut out = [0; ROUTING_LENGTH];
         if self.is_for_me {
-            out[0] = 1;
+            out[0] |= 1;
+        }
+        if self.who_am_i {
+            out[0] |= 2;
         }
         out[1] = self.eta as u8;
         out[2] = (self.eta >> 8) as u8;
@@ -128,7 +136,8 @@ impl RoutingInfo {
         out
     }
     pub fn from_bytes(out: [u8; ROUTING_LENGTH]) -> Option<RoutingInfo> {
-        let is_for_me = out[0] == 1;
+        let is_for_me = (out[0] & 1) == 1;
+        let who_am_i = (out[0] & 2) == 2;
         let eta = out[1] as u32 + ((out[2] as u32) << 8)
             + ((out[3] as u32) << 16) + ((out[4] as u32) << 24);
         let addr = match out[7] {
@@ -154,6 +163,7 @@ impl RoutingInfo {
         };
         Some(RoutingInfo {
             is_for_me: is_for_me,
+            who_am_i: who_am_i,
             eta: eta,
             ip: addr,
         })
