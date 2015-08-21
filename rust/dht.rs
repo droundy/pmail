@@ -33,7 +33,7 @@ impl<'a> From<&'a SocketAddr> for Addr {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RoutingInfo {
     /// The IP addressing information, 18 bytes, enough for an ipv6
     /// address and a 16 bit port.
@@ -55,12 +55,13 @@ pub const NUM_IN_RESPONSE: usize = 10;
 /// be encrypted and authenticated to send to some receiver.
 pub const USER_MESSAGE_LENGTH: usize = 512;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RoutingGift {
     pub addr: Addr,
     pub key: crypto::PublicKey,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum MessageType {
     Greetings([RoutingGift; NUM_IN_RESPONSE]),
     Response([RoutingGift; NUM_IN_RESPONSE]),
@@ -70,10 +71,11 @@ pub enum MessageType {
     },
     ForwardPlease {
         destination: crypto::PublicKey,
-        message: [u8; USER_MESSAGE_LENGTH],
+        message: [[u8; 32]; 16],
     },
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Message {
     pub from: crypto::PublicKey, // 32 bytes, but not part of the ROUTING_LENGTH
     pub contents: MessageType, // 6 bytes
