@@ -5,6 +5,11 @@ authors = ["David Roundy <roundyd@physics.oregonstate.edu>"]
 
 license = "GPLv3"
 
+[[bin]]
+name = "relay"
+path = "rust/bin/relay.rs"
+
+
 [lib]
 name = "pmail"
 path = "rust/lib.rs"

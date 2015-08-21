@@ -35,25 +35,48 @@ impl<'a> From<&'a SocketAddr> for Addr {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct RoutingInfo {
-    /// The IP addressing information, which is either
+    /// The IP addressing information, 18 bytes, enough for an ipv6
+    /// address and a 16 bit port.
     ip: Addr,
     /// The time in seconds (after some specified epoch) by which we
-    /// want the message to arrive.
+    /// want the message to arrive.  4 bytes/
     eta: u32,
     /// The payload is for us!  Wheee!
     is_for_me: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum MessageType {
-    Greetings,
-    Query(crypto::PublicKey),
-}
+/// When we ask for addresses, we only get `NUM_IN_RESPONSE`, since
+/// that is all that will fit in the payload, along with their public
+/// key and the authentication overhead.
+pub const NUM_IN_RESPONSE: usize = 10;
+
+
+/// The `USER_MESSAGE_LENGTH` is the size of actual content that can
+/// be encrypted and authenticated to send to some receiver.
+pub const USER_MESSAGE_LENGTH: usize = 512;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct RoutingGift {
+    pub addr: Addr,
+    pub key: crypto::PublicKey,
+}
+
+pub enum MessageType {
+    Greetings([RoutingGift; NUM_IN_RESPONSE]),
+    Response([RoutingGift; NUM_IN_RESPONSE]),
+    ForwardToMe {
+        destination: crypto::PublicKey,
+        gift: [RoutingGift; NUM_IN_RESPONSE],
+    },
+    ForwardPlease {
+        destination: crypto::PublicKey,
+        message: [u8; USER_MESSAGE_LENGTH],
+    },
+}
+
 pub struct Message {
-    pub from: crypto::PublicKey,
-    pub mtype: MessageType,
+    pub from: crypto::PublicKey, // 32 bytes, but not part of the ROUTING_LENGTH
+    pub contents: MessageType, // 6 bytes
 }
 
 ///
