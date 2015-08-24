@@ -216,7 +216,7 @@ impl RoutingInfo {
     }
 }
 
-pub fn read_keypair(name: &str) -> Result<crypto::KeyPair, Error> {
+pub fn read_keypair(name: &std::path::Path) -> Result<crypto::KeyPair, Error> {
     use std::io::Read;
 
     let mut f = try!(std::fs::File::open(name));
@@ -231,7 +231,7 @@ pub fn read_keypair(name: &str) -> Result<crypto::KeyPair, Error> {
     })
 }
 
-pub fn read_or_generate_keypair(name: &str) -> Result<crypto::KeyPair, Error> {
+pub fn read_or_generate_keypair(name: &std::path::Path) -> Result<crypto::KeyPair, Error> {
     use std::io::Write;
 
     match read_keypair(name) {
@@ -266,7 +266,12 @@ pub fn start_static() -> Result<(), Error> {
     addresses.insert(bingley_key, bingley_addr);
     pubkeys.insert(bingley_addr, bingley_key);
 
-    read_or_generate_keypair("key").unwrap();
+    let mut keyfilename = match std::env::home_dir() {
+        Some(hd) => hd,
+        None => std::path::PathBuf::from("."),
+    };
+    keyfilename.push(".pmail.key");
+    read_or_generate_keypair(keyfilename.as_path()).unwrap();
 
     let (_lopriority, _send, _get, _) = try!(udp::listen());
 
