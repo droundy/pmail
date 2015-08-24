@@ -4,6 +4,7 @@ use std::net::SocketAddr;
 use onionsalt::ROUTING_LENGTH;
 use onionsalt::crypto;
 use std::io::Error;
+use std;
 
 use super::udp;
 
@@ -18,6 +19,48 @@ pub enum Addr {
         addr: [u8; 4],
         port: u16
     },
+}
+
+impl Addr {
+    pub fn bytes(&self, out: &mut[u8; 18]) {
+        match *self {
+            Addr::V6{ addr, port } => {
+                out[0] = port as u8;
+                out[1] = (port >> 8) as u8;
+                for i in 0..8 {
+                    out[2 + 2*i] = addr[i] as u8;
+                    out[2 + 2*i+1] = (addr[i] >> 8) as u8;
+                }
+            },
+            Addr::V4{ addr, port } => {
+                for i in 0..18 {
+                    out[i] = 0;
+                }
+                out[2] = port as u8;
+                out[3] = (port >> 8) as u8;
+                for i in 0..4 {
+                    out[4+i] = addr[i];
+                }
+            },
+        }
+    }
+    pub fn from_bytes(inp: [u8; 18]) -> Addr {
+        if inp[0] == 0 && inp[1] == 0 {
+            Addr::V4 {
+                addr: [inp[4], inp[5], inp[6], inp[7]],
+                port: inp[2] as u16 + (inp[3] as u16) << 8,
+            }
+        } else {
+            let mut addr = [0; 8];
+            for i in 0..8 {
+                addr[i] = inp[2 + 2*i] as u16 + ((inp[2 + 2*i+1] as u16) << 8);
+            }
+            Addr::V6 {
+                addr: addr,
+                port: inp[0] as u16 + (inp[1] as u16) << 8,
+            }
+        }
+    }
 }
 
 impl<'a> From<&'a SocketAddr> for Addr {
@@ -75,7 +118,9 @@ pub enum MessageType {
     },
     ForwardPlease {
         destination: crypto::PublicKey,
-        message: [[u8; 32]; 16],
+        message: [[u8; 32]; 16], // this is a hokey and lazy
+                                 // workaround for lack of derive for
+                                 // arrays larger than 32.
     },
 }
 
@@ -102,8 +147,10 @@ impl RoutingInfo {
             who_am_i: false,
         }
     }
-    pub fn bytes(&self) -> [u8; ROUTING_LENGTH] {
-        let mut out = [0; ROUTING_LENGTH];
+    pub fn bytes(&self, out: &mut[u8; ROUTING_LENGTH]) {
+        for i in 0..ROUTING_LENGTH {
+            out[i] = 0;
+        }
         if self.is_for_me {
             out[0] |= 1;
         }
@@ -133,7 +180,6 @@ impl RoutingInfo {
                 }
             },
         }
-        out
     }
     pub fn from_bytes(out: [u8; ROUTING_LENGTH]) -> Option<RoutingInfo> {
         let is_for_me = (out[0] & 1) == 1;
@@ -170,7 +216,48 @@ impl RoutingInfo {
     }
 }
 
-pub fn start() -> Result<(), Error> {
+pub fn read_keypair(name: &str) -> Result<crypto::KeyPair, Error> {
+    use std::io::Read;
+
+    let mut f = try!(std::fs::File::open(name));
+    let mut data = Vec::new();
+    try!(f.read_to_end(&mut data));
+    if data.len() != 64 {
+        return Err(Error::new(std::io::ErrorKind::Other, "oh no!"));
+    }
+    Ok(crypto::KeyPair {
+        public: crypto::PublicKey(*array_ref![data, 0, u8, 32]),
+        secret: crypto::SecretKey(*array_ref![data, 32, u8, 32]),
+    })
+}
+
+pub fn read_or_generate_keypair(name: &str) -> Result<crypto::KeyPair, Error> {
+    use std::io::Write;
+
+    match read_keypair(name) {
+        Ok(kp) => Ok(kp),
+        _ => {
+            match crypto::box_keypair() {
+                Err(_) => Err(Error::new(std::io::ErrorKind::Other, "oh bad random!")),
+                Ok(kp) => {
+                    let mut f = try!(std::fs::File::create(name));
+                    let mut data = [0; 64];
+                    *array_mut_ref![data, 0, u8, 32] = kp.public.0;
+                    *array_mut_ref![data, 32, u8, 32] = kp.secret.0;
+                    try!(f.write_all(&data));
+                    print!("Created new key!  [");
+                    for i in 0..32 {
+                        print!("{}, ", kp.public.0[i]);
+                    }
+                    println!("]");
+                    Ok(kp)
+                }
+            }
+        }
+    }
+}
+
+pub fn start_static() -> Result<(), Error> {
     let mut addresses = HashMap::new();
     let mut pubkeys = HashMap::new();
 
@@ -178,6 +265,8 @@ pub fn start() -> Result<(), Error> {
     let bingley_key = crypto::PublicKey([0;32]);
     addresses.insert(bingley_key, bingley_addr);
     pubkeys.insert(bingley_addr, bingley_key);
+
+    read_or_generate_keypair("key").unwrap();
 
     let (_lopriority, _send, _get, _) = try!(udp::listen());
 

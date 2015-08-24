@@ -1,5 +1,8 @@
 #![deny(warnings)]
 
+#[macro_use]
+extern crate arrayref;
+
 extern crate onionsalt;
 
 pub mod udp;
