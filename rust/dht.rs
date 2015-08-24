@@ -262,7 +262,11 @@ pub fn start_static() -> Result<(), Error> {
     let mut pubkeys = HashMap::new();
 
     let bingley_addr = Addr::V4{ addr: [128,193,96,51], port: udp::PORT };
-    let bingley_key = crypto::PublicKey([0;32]);
+    let bingley_key = crypto::PublicKey([212, 73, 217, 51, 40, 221, 144,
+                                         145, 86, 176, 174, 255, 41, 29,
+                                         172, 191, 136, 196, 210, 157, 215,
+                                         11, 144, 238, 198, 47, 200, 43,
+                                         227, 172, 76, 45]);
     addresses.insert(bingley_key, bingley_addr);
     pubkeys.insert(bingley_addr, bingley_key);
 
