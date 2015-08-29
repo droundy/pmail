@@ -5,5 +5,5 @@ use pmail::dht;
 
 fn main() {
     println!("Hello world");
-    dht::start_static().unwrap();
+    dht::start_static_node().unwrap();
 }
