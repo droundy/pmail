@@ -90,16 +90,18 @@ impl MyBytes<[u8; 4]> for u32 {
 
 impl MyBytes<[u8; ROUTING_LENGTH]> for RoutingInfo {
     fn bytes(&self, out: &mut[u8; ROUTING_LENGTH]) {
-        out[0] = self.is_for_me as u8 + ((self.who_am_i as u8) << 1);
-        self.ip.bytes(array_mut_ref![out,1,18]);
-        self.eta.bytes(array_mut_ref![out,19,4]);
+        let (flags,addr,eta,_) = mut_array_refs!(out, 1, 18, 4,1);
+        flags[0] = self.is_for_me as u8 + ((self.who_am_i as u8) << 1);
+        self.ip.bytes(addr);
+        self.eta.bytes(eta);
     }
     fn from_bytes(inp: &[u8; ROUTING_LENGTH]) -> RoutingInfo {
+        let (flags,addr,eta,_) = array_refs!(inp, 1, 18, 4,1);
         RoutingInfo {
-            ip: SocketAddr::from_bytes(array_ref![inp,1,18]),
-            eta: u32::from_bytes(array_ref![inp,19,4]),
-            is_for_me: inp[0] & 1 == 1,
-            who_am_i: inp[0] & 2 == 2,
+            ip: SocketAddr::from_bytes(addr),
+            eta: u32::from_bytes(eta),
+            is_for_me: flags[0] & 1 == 1,
+            who_am_i: flags[0] & 2 == 2,
         }
     }
 }
