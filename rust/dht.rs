@@ -4,12 +4,15 @@ use std::net::{SocketAddr, SocketAddrV6, SocketAddrV4,
                Ipv6Addr, Ipv4Addr};
 use onionsalt::{ROUTING_LENGTH,
                 PAYLOAD_LENGTH};
-use onionsalt::{crypto, onionbox};
+use onionsalt::{crypto,
+                onionbox,
+                onionbox_open};
 use std::io::Error;
 use std;
 use super::udp;
 use std::collections::HashMap;
 use std::str::FromStr;
+use std::sync::mpsc::{Receiver};
 
 trait MyBytes<T> {
     fn bytes(&self, &mut T);
@@ -261,109 +264,32 @@ impl MyBytes<[u8; PAYLOAD_LENGTH]> for Message {
 //     }
 // }
 
-// ///
-// const EPOCH: time::Timespec = time::Timespec { sec: 1420092000, nsec: 0 };
+/// The `EPOCH` is when time begins.  We have not facilities for
+/// sending messages prior to this time.  However, we also do not
+/// promise never to change `EPOCH`.  It may be changed in a future
+/// version of the protocol in order to avoid a Y2K-like problem.
+/// Therefore, `EPOCH`-difference times should not be stored on disk,
+/// and should only be sent over the network.  It is also possible
+/// that future changes will needlessly change `EPOCH` (but only while
+/// making other network protool changes) simply to flush out
+/// buggy use of thereof.
+const EPOCH: time::Timespec = time::Timespec { sec: 1420092000, nsec: 0 };
 
-// pub fn now() -> u32 {
-//     (time::get_time().sec - EPOCH.sec) as u32
-// }
+pub fn now() -> u32 {
+    (time::get_time().sec - EPOCH.sec) as u32
+}
 
-// impl RoutingInfo {
-//     pub fn new(saddr: SocketAddr, delay_time: u32) -> RoutingInfo {
-//         let eta = now() + delay_time;
-//         RoutingInfo {
-//             ip: Addr::from(&saddr),
-//             eta: eta,
-//             is_for_me: false,
-//             who_am_i: false,
-//         }
-//     }
-//     pub fn newaddr(saddr: Addr, delay_time: u32) -> RoutingInfo {
-//         let eta = now() + delay_time;
-//         RoutingInfo {
-//             ip: saddr,
-//             eta: eta,
-//             is_for_me: false,
-//             who_am_i: false,
-//         }
-//     }
-//     pub fn empty(delay_time: u32) -> RoutingInfo {
-//         let eta = now() + delay_time;
-//         RoutingInfo {
-//             ip: Addr::V4{ addr: [0;4], port: 0},
-//             eta: eta,
-//             is_for_me: true,
-//             who_am_i: false,
-//         }
-//     }
-//     pub fn bytes(&self, out: &mut[u8; ROUTING_LENGTH]) {
-//         for i in 0..ROUTING_LENGTH {
-//             out[i] = 0;
-//         }
-//         if self.is_for_me {
-//             out[0] |= 1;
-//         }
-//         if self.who_am_i {
-//             out[0] |= 2;
-//         }
-//         out[1] = self.eta as u8;
-//         out[2] = (self.eta >> 8) as u8;
-//         out[3] = (self.eta >> 16) as u8;
-//         out[4] = (self.eta >> 24) as u8;
-//         match self.ip {
-//             Addr::V6{ addr, port } => {
-//                 out[5] = 6;
-//                 out[6] = port as u8;
-//                 out[7] = (port >> 8) as u8;
-//                 for i in 0..8 {
-//                     out[8 + 2*i] = addr[i] as u8;
-//                     out[8 + 2*i+1] = (addr[i] >> 8) as u8;
-//                 }
-//             },
-//             Addr::V4{ addr, port } => {
-//                 out[5] = 4;
-//                 out[6] = port as u8;
-//                 out[7] = (port >> 8) as u8;
-//                 for i in 0..4 {
-//                     out[8+i] = addr[i];
-//                 }
-//             },
-//         }
-//     }
-//     pub fn from_bytes(out: [u8; ROUTING_LENGTH]) -> Option<RoutingInfo> {
-//         let is_for_me = (out[0] & 1) == 1;
-//         let who_am_i = (out[0] & 2) == 2;
-//         let eta = out[1] as u32 + ((out[2] as u32) << 8)
-//             + ((out[3] as u32) << 16) + ((out[4] as u32) << 24);
-//         let addr = match out[7] {
-//             6 => {
-//                 let port = out[6] as u16 + ((out[7] as u16) << 8);
-//                 let mut addr = [0; 8];
-//                 for i in 0..8 {
-//                     addr[i] = out[8 + 2*i] as u16 + ((out[8 + 2*i+1] as u16) << 8);
-//                 }
-//                 Addr::V6{ addr: addr, port: port }
-//             },
-//             4 => {
-//                 let port = out[6] as u16 + ((out[7] as u16) << 8);
-//                 let mut addr = [0;4];
-//                 for i in 0..4 {
-//                     addr[i] = out[8+i];
-//                 }
-//                 Addr::V4{ addr: addr, port: port }
-//             },
-//             _ => {
-//                 return None;
-//             }
-//         };
-//         Some(RoutingInfo {
-//             is_for_me: is_for_me,
-//             who_am_i: who_am_i,
-//             eta: eta,
-//             ip: addr,
-//         })
-//     }
-// }
+impl RoutingInfo {
+    pub fn new(saddr: SocketAddr, delay_time: u32) -> RoutingInfo {
+        let eta = now() + delay_time;
+        RoutingInfo {
+            ip: saddr,
+            eta: eta,
+            is_for_me: false,
+            who_am_i: false,
+        }
+    }
+}
 
 pub fn read_keypair(name: &std::path::Path) -> Result<crypto::KeyPair, Error> {
     use std::io::Read;
@@ -416,7 +342,7 @@ fn bingley() -> RoutingGift {
     RoutingGift { addr: bingley_addr, key: bingley_key }
 }
 
-fn construct_gift(addrmap: HashMap<crypto::PublicKey, SocketAddr>)
+fn construct_gift(addrmap: &HashMap<crypto::PublicKey, SocketAddr>)
                   -> [RoutingGift; NUM_IN_RESPONSE] {
     let mut out = [bingley(); NUM_IN_RESPONSE];
     let mut i = 0;
@@ -437,6 +363,54 @@ fn construct_gift(addrmap: HashMap<crypto::PublicKey, SocketAddr>)
     out
 }
 
+pub fn wait_for_who_i_am(get: &Receiver<udp::RawEncryptedMessage>,
+                         from: &RoutingGift,
+                         my_key: &crypto::KeyPair) -> SocketAddr {
+    fn read_one_packet(get: &Receiver<udp::RawEncryptedMessage>,
+                       from: &RoutingGift,
+                       my_key: &crypto::KeyPair) -> Result<SocketAddr, crypto::NaClError> {
+        let packet = try!(get.recv());
+        println!("I got {:?}\n", packet);
+        if packet.ip != from.addr {
+            return Err(crypto::NaClError::from("Wrong ip address"));
+        }
+        let oob = try!(onionbox_open(&packet.data, &my_key.secret));
+        println!("Packet has valid encryption.");
+        if oob.key() == from.key {
+            println!("Packet is from the right node.");
+            let payload = try!(oob.payload(my_key));
+            match Message::from_bytes(&payload) {
+                Message::Greetings(_) => {
+                    Err(crypto::NaClError::from("Greetings not expected"))
+                },
+                Message::Response(rgs) => {
+                    Ok(rgs[0].addr)
+                },
+                Message::PickUp {..} => {
+                    Err(crypto::NaClError::from("Pickup not expected"))
+                },
+                Message::ForwardPlease {..} => {
+                    Err(crypto::NaClError::from("Forward not expected"))
+                },
+            }
+        } else {
+            Err(crypto::NaClError::from("Wrong public key"))
+        }
+    }
+    loop {
+        match read_one_packet(get, from, my_key) {
+            Ok(sa) => {
+                return sa;
+            },
+            Err(e) => {
+                println!("Got problem: {:?}", e);
+            },
+        }
+    }
+}
+
+/// Start relaying messages with a static public key (i.e. one that
+/// does not change).
 pub fn start_static_node() -> Result<(), Error> {
     let mut addresses = HashMap::new();
     let mut pubkeys = HashMap::new();
@@ -452,26 +426,80 @@ pub fn start_static_node() -> Result<(), Error> {
     keyfilename.push(".pmail.key");
     let my_key = read_or_generate_keypair(keyfilename.as_path()).unwrap();
 
-    let (lopriority, _send, _get, _) = try!(udp::listen());
+    let (lopriority, send, get, _) = try!(udp::listen());
 
-    let mut hello_payload = [0; PAYLOAD_LENGTH];
-    Message::Greetings(construct_gift(addresses)).bytes(&mut hello_payload);
+    let ob = {
+        let mut hello_payload = [0; PAYLOAD_LENGTH];
+        Message::Greetings(construct_gift(&addresses)).bytes(&mut hello_payload);
 
-    let mut keys_and_routes = [(bingley_gift.key, [0; ROUTING_LENGTH])];
-    RoutingInfo { ip: bingley_gift.addr,
-                  eta: 60,
-                  is_for_me: true,
-                  who_am_i: true,
-    }.bytes(&mut keys_and_routes[0].1);
+        let mut keys_and_routes = [(bingley_gift.key, [0; ROUTING_LENGTH])];
+        let mut ri = RoutingInfo::new(bingley_gift.addr, 60);
+        ri.is_for_me = true;
+        ri.who_am_i = true;
+        ri.bytes(&mut keys_and_routes[0].1);
 
-    let mut ob = onionbox(&keys_and_routes, 0).unwrap();
-    ob.add_payload(my_key, &hello_payload);
+        let mut ob = onionbox(&keys_and_routes, 0).unwrap();
+        ob.add_payload(my_key, &hello_payload);
 
-    lopriority.send(udp::RawEncryptedMessage{
-        ip: bingley_gift.addr,
-        data: ob.packet(),
-    }).unwrap();
+        lopriority.send(udp::RawEncryptedMessage{
+            ip: bingley_gift.addr,
+            data: ob.packet(),
+        }).unwrap();
+        ob
+    };
 
+    let _my_addr = if my_key.public != bingley().key {
+        wait_for_who_i_am(&get, &bingley(), &my_key)
+    } else {
+        bingley().addr
+    };
+
+    for packet in get.iter() {
+        println!("I got {:?}\n", packet);
+        match onionbox_open(&packet.data, &my_key.secret) {
+            Ok(oob) => {
+                let routing = RoutingInfo::from_bytes(&oob.routing());
+                println!("It's for me! {:?}", routing);
+                if routing.is_for_me {
+                    match oob.payload(&my_key) {
+                        Err(e) => {
+                            println!("Unable to read message! {:?}", e);
+                        },
+                        Ok(payload) => {
+                            println!("Got lovely payload {:?}", &payload[0..]);
+                            if routing.who_am_i {
+                                let mut you_are = [0; PAYLOAD_LENGTH];
+                                let mut gift = construct_gift(&addresses);
+                                gift[0] = RoutingGift{ addr: packet.ip,
+                                                       key: oob.key() };
+                                Message::Greetings(gift).bytes(&mut you_are);
+                                let mut keys_and_routes = [(oob.key(), [0; ROUTING_LENGTH])];
+                                let mut ri = RoutingInfo::new(packet.ip, 60);
+                                ri.is_for_me = true;
+                                ri.who_am_i = true;
+                                ri.bytes(&mut keys_and_routes[0].1);
+                                let mut ob = onionbox(&keys_and_routes, 0).unwrap();
+                                ob.add_payload(my_key, &you_are);
+                                send.send(udp::RawEncryptedMessage{
+                                    ip: packet.ip,
+                                    data: ob.packet(),
+                                }).unwrap();
+                            }
+                        }
+                    }
+                }
+            },
+            _ =>
+                match ob.read_return(my_key, &packet.data) {
+                    Ok(_msg) => {
+                        println!("Response!");
+                    },
+                    _ => {
+                        println!("Message illegible!");
+                    },
+                },
+        }
+    }
     // lopriority.send();
     Ok(())
 }
