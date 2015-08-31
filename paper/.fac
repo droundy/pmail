@@ -1,1 +1,1 @@
-| pdflatex messy.tex && pdflatex messy.tex
+| pdflatex pmail.tex && pdflatex pmail.tex
