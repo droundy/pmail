@@ -21,24 +21,20 @@ impl MyBytes<[u8; 18]> for SocketAddr {
     fn bytes(&self, out: &mut[u8; 18]) {
         match *self {
             SocketAddr::V6(sa) => {
-                out[0] = sa.port() as u8;
-                out[1] = (sa.port() >> 8) as u8;
+                let (port, a, b, c, d, e, f, g, h) = mut_array_refs!(out, 2,
+                                                                     2,2,2,2,
+                                                                     2,2,2,2);
+                sa.port().bytes(port);
                 let addr = sa.ip().segments();
-                for i in 0..8 {
-                    out[2 + 2*i] = addr[i] as u8;
-                    out[2 + 2*i+1] = (addr[i] >> 8) as u8;
-                }
+                addr[0].bytes(a); addr[1].bytes(b); addr[2].bytes(c); addr[3].bytes(d);
+                addr[4].bytes(e); addr[5].bytes(f); addr[6].bytes(g); addr[7].bytes(h);
             },
             SocketAddr::V4(sa) => {
                 for i in 0..18 {
                     out[i] = 0;
                 }
-                out[2] = sa.port() as u8;
-                out[3] = (sa.port() >> 8) as u8;
-                let addr = sa.ip().octets();
-                for i in 0..4 {
-                    out[4+i] = addr[i];
-                }
+                sa.port().bytes(array_mut_ref![out, 2, 2]);
+                *array_mut_ref![out,4,4] = sa.ip().octets();
             },
         }
     }
@@ -85,6 +81,16 @@ impl MyBytes<[u8; 4]> for u32 {
     }
     fn from_bytes(inp: &[u8; 4]) -> u32 {
         inp[0] as u32 + ((inp[1] as u32) << 8) + ((inp[2] as u32) << 16) + ((inp[3] as u32) << 24)
+    }
+}
+
+impl MyBytes<[u8; 2]> for u16 {
+    fn bytes(&self, out: &mut[u8; 2]) {
+        out[0] = *self as u8;
+        out[1] = (*self >> 8) as u8;
+    }
+    fn from_bytes(inp: &[u8; 2]) -> u16 {
+        inp[0] as u16 + ((inp[1] as u16) << 8)
     }
 }
 
@@ -153,16 +159,14 @@ impl MyBytes<[u8; (18+32)*NUM_IN_RESPONSE]> for [RoutingGift; NUM_IN_RESPONSE] {
         }
     }
     fn from_bytes(inp: &[u8; (18+32)*NUM_IN_RESPONSE]) -> [RoutingGift; NUM_IN_RESPONSE] {
-        [RoutingGift::from_bytes(array_ref![inp,0,18+32]),
-         RoutingGift::from_bytes(array_ref![inp,50,18+32]),
-         RoutingGift::from_bytes(array_ref![inp,100,18+32]),
-         RoutingGift::from_bytes(array_ref![inp,150,18+32]),
-         RoutingGift::from_bytes(array_ref![inp,200,18+32]),
-         RoutingGift::from_bytes(array_ref![inp,250,18+32]),
-         RoutingGift::from_bytes(array_ref![inp,300,18+32]),
-         RoutingGift::from_bytes(array_ref![inp,350,18+32]),
-         RoutingGift::from_bytes(array_ref![inp,400,18+32]),
-         RoutingGift::from_bytes(array_ref![inp,450,18+32])]
+        let (g0,g1,g2,g3,g4,g5,g6,g7,g8,g9) = array_refs!(inp,
+                                                          50, 50, 50, 50, 50,
+                                                          50, 50, 50, 50, 50);
+        [RoutingGift::from_bytes(g0), RoutingGift::from_bytes(g1),
+         RoutingGift::from_bytes(g2), RoutingGift::from_bytes(g3),
+         RoutingGift::from_bytes(g4), RoutingGift::from_bytes(g5),
+         RoutingGift::from_bytes(g6), RoutingGift::from_bytes(g7),
+         RoutingGift::from_bytes(g8), RoutingGift::from_bytes(g9)]
     }
 }
 
