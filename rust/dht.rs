@@ -3,9 +3,8 @@ extern crate time;
 use std::net::{SocketAddr, SocketAddrV6, SocketAddrV4,
                Ipv6Addr, Ipv4Addr};
 use onionsalt::{ROUTING_LENGTH,
-                PAYLOAD_LENGTH,
-                PACKET_LENGTH};
-use onionsalt::crypto;
+                PAYLOAD_LENGTH};
+use onionsalt::{crypto, onionbox};
 use std::io::Error;
 use std;
 use super::udp;
@@ -407,22 +406,29 @@ pub fn read_or_generate_keypair(name: &std::path::Path) -> Result<crypto::KeyPai
     }
 }
 
-fn construct_gift(addrmap: HashMap<crypto::PublicKey, SocketAddr>)
-                  -> [RoutingGift; NUM_IN_RESPONSE] {
-    let mut i = 0;
+fn bingley() -> RoutingGift {
     let bingley_addr = SocketAddr::from_str("128.193.96.51:54321").unwrap();
     let bingley_key = crypto::PublicKey([212, 73, 217, 51, 40, 221, 144,
                                          145, 86, 176, 174, 255, 41, 29,
                                          172, 191, 136, 196, 210, 157, 215,
                                          11, 144, 238, 198, 47, 200, 43,
                                          227, 172, 76, 45]);
-    let mut out = [RoutingGift { addr: bingley_addr, key: bingley_key }; NUM_IN_RESPONSE];
+    RoutingGift { addr: bingley_addr, key: bingley_key }
+}
+
+fn construct_gift(addrmap: HashMap<crypto::PublicKey, SocketAddr>)
+                  -> [RoutingGift; NUM_IN_RESPONSE] {
+    let mut out = [bingley(); NUM_IN_RESPONSE];
+    let mut i = 0;
     for k in addrmap.keys() {
         out[i] = RoutingGift {
             addr: addrmap[k],
             key: *k,
         };
         i += 1;
+        if i <= NUM_IN_RESPONSE {
+            break;
+        }
     }
     while i < NUM_IN_RESPONSE {
         out[i] = out[0];
@@ -435,32 +441,35 @@ pub fn start_static_node() -> Result<(), Error> {
     let mut addresses = HashMap::new();
     let mut pubkeys = HashMap::new();
 
-    let bingley_addr = SocketAddr::from_str("128.193.96.51:54321").unwrap();
-    let bingley_key = crypto::PublicKey([212, 73, 217, 51, 40, 221, 144,
-                                         145, 86, 176, 174, 255, 41, 29,
-                                         172, 191, 136, 196, 210, 157, 215,
-                                         11, 144, 238, 198, 47, 200, 43,
-                                         227, 172, 76, 45]);
-    addresses.insert(bingley_key, bingley_addr);
-    pubkeys.insert(bingley_addr, bingley_key);
+    let bingley_gift = bingley();
+    addresses.insert(bingley_gift.key, bingley_gift.addr);
+    pubkeys.insert(bingley_gift.addr, bingley_gift.key);
 
     let mut keyfilename = match std::env::home_dir() {
         Some(hd) => hd,
         None => std::path::PathBuf::from("."),
     };
     keyfilename.push(".pmail.key");
-    let _my_key = read_or_generate_keypair(keyfilename.as_path()).unwrap();
+    let my_key = read_or_generate_keypair(keyfilename.as_path()).unwrap();
 
-    let (_lopriority, send, _get, _) = try!(udp::listen());
+    let (lopriority, _send, _get, _) = try!(udp::listen());
 
-    let hello_bingley = Message::Greetings(construct_gift(addresses));
-    let mut hello_packet = [0; PACKET_LENGTH];
-    hello_bingley.bytes(array_mut_ref![hello_packet,
-                                       PACKET_LENGTH-PAYLOAD_LENGTH,
-                                       PAYLOAD_LENGTH]);
-    send.send(udp::RawEncryptedMessage{
-        ip: bingley_addr,
-        data: hello_packet,
+    let mut hello_payload = [0; PAYLOAD_LENGTH];
+    Message::Greetings(construct_gift(addresses)).bytes(&mut hello_payload);
+
+    let mut keys_and_routes = [(bingley_gift.key, [0; ROUTING_LENGTH])];
+    RoutingInfo { ip: bingley_gift.addr,
+                  eta: 60,
+                  is_for_me: true,
+                  who_am_i: true,
+    }.bytes(&mut keys_and_routes[0].1);
+
+    let mut ob = onionbox(&keys_and_routes, 0).unwrap();
+    ob.add_payload(my_key, &hello_payload);
+
+    lopriority.send(udp::RawEncryptedMessage{
+        ip: bingley_gift.addr,
+        data: ob.packet(),
     }).unwrap();
 
     // lopriority.send();
