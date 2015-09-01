@@ -307,9 +307,35 @@ pub fn read_keypair(name: &std::path::Path) -> Result<crypto::KeyPair, Error> {
     })
 }
 
-pub fn read_or_generate_keypair(name: &std::path::Path) -> Result<crypto::KeyPair, Error> {
+/// This is just a crude guess as to the hostname.  I didn't put much
+/// effort into this because it is only really relevant in the case
+/// where you have a shared home directory for multiple different
+/// computers that should be independently running pmail.
+pub fn gethostname() -> Result<String, Error> {
+    use std::io::Read;
+
+    let mut f = try!(std::fs::File::open("/etc/hostname"));
+    let mut hostname = String::new();
+    try!(f.read_to_string(&mut hostname));
+    match hostname.split_whitespace().next() {
+        Some(hn) => Ok(String::from(hn)),
+        None => Err(Error::new(std::io::ErrorKind::Other, "malformed /etc/hostname")),
+    }
+}
+
+pub fn read_or_generate_keypair(mut dirname: std::path::PathBuf)
+                                -> Result<crypto::KeyPair, Error> {
     use std::io::Write;
 
+    match gethostname() {
+        Err(_) => {
+            dirname.push(".pmail.key");
+        },
+        Ok(hostname) => {
+            dirname.push(format!(".pmail-{}.key", hostname));
+        },
+    };
+    let name = dirname.as_path();
     match read_keypair(name) {
         Ok(kp) => Ok(kp),
         _ => {
@@ -429,12 +455,11 @@ pub fn start_static_node() -> Result<(), Error> {
     addresses.insert(bingley_gift.key, bingley_gift.addr);
     pubkeys.insert(bingley_gift.addr, bingley_gift.key);
 
-    let mut keyfilename = match std::env::home_dir() {
+    let keydirname = match std::env::home_dir() {
         Some(hd) => hd,
         None => std::path::PathBuf::from("."),
     };
-    keyfilename.push(".pmail.key");
-    let my_key = read_or_generate_keypair(keyfilename.as_path()).unwrap();
+    let my_key = read_or_generate_keypair(keydirname).unwrap();
 
     let (lopriority, send, get, _) = try!(udp::listen());
 
