@@ -2,6 +2,7 @@ extern crate time;
 
 use std::net::{SocketAddr, SocketAddrV6, SocketAddrV4,
                Ipv6Addr, Ipv4Addr};
+use onionsalt;
 use onionsalt::{ROUTING_LENGTH,
                 PAYLOAD_LENGTH};
 use onionsalt::{crypto,
@@ -12,7 +13,7 @@ use std;
 use super::udp;
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::mpsc::{Receiver};
+use std::sync::mpsc::{Receiver, SyncSender};
 
 trait MyBytes<T> {
     fn bytes(&self, &mut T);
@@ -363,42 +364,51 @@ fn construct_gift(addrmap: &HashMap<crypto::PublicKey, SocketAddr>)
     out
 }
 
-pub fn wait_for_who_i_am(get: &Receiver<udp::RawEncryptedMessage>,
-                         from: &RoutingGift,
-                         my_key: &crypto::KeyPair) -> SocketAddr {
+pub fn query_who_i_am(lopriority: &SyncSender<udp::RawEncryptedMessage>,
+                      get: &Receiver<udp::RawEncryptedMessage>,
+                      who: &RoutingGift,
+                      my_key: &crypto::KeyPair) -> SocketAddr {
+    let mut hello_payload = [0; PAYLOAD_LENGTH];
+    Message::Greetings([*who; NUM_IN_RESPONSE]).bytes(&mut hello_payload);
+
+    let mut keys_and_routes = [(who.key, [0; ROUTING_LENGTH])];
+    let mut ri = RoutingInfo::new(who.addr, 60);
+    ri.is_for_me = true;
+    ri.who_am_i = true;
+    ri.bytes(&mut keys_and_routes[0].1);
+
+    let mut ob = onionbox(&keys_and_routes, 0).unwrap();
+    ob.add_payload(*my_key, &hello_payload);
+
+    lopriority.send(udp::RawEncryptedMessage{
+        ip: who.addr,
+        data: ob.packet(),
+    }).unwrap();
+
     fn read_one_packet(get: &Receiver<udp::RawEncryptedMessage>,
-                       from: &RoutingGift,
-                       my_key: &crypto::KeyPair) -> Result<SocketAddr, crypto::NaClError> {
+                       my_key: &crypto::KeyPair,
+                       ob: &onionsalt::OnionBox) -> Result<SocketAddr, crypto::NaClError> {
         let packet = try!(get.recv());
         println!("I got {:?}\n", packet);
-        if packet.ip != from.addr {
-            return Err(crypto::NaClError::from("Wrong ip address"));
-        }
-        let oob = try!(onionbox_open(&packet.data, &my_key.secret));
+        let resp = try!(ob.read_return(*my_key, &packet.data));
         println!("Packet has valid encryption.");
-        if oob.key() == from.key {
-            println!("Packet is from the right node.");
-            let payload = try!(oob.payload(my_key));
-            match Message::from_bytes(&payload) {
-                Message::Greetings(_) => {
-                    Err(crypto::NaClError::from("Greetings not expected"))
-                },
-                Message::Response(rgs) => {
-                    Ok(rgs[0].addr)
-                },
-                Message::PickUp {..} => {
-                    Err(crypto::NaClError::from("Pickup not expected"))
-                },
-                Message::ForwardPlease {..} => {
-                    Err(crypto::NaClError::from("Forward not expected"))
-                },
-            }
-        } else {
-            Err(crypto::NaClError::from("Wrong public key"))
+        match Message::from_bytes(&resp) {
+            Message::Greetings(_) => {
+                Err(crypto::NaClError::from("Greetings not expected"))
+            },
+            Message::Response(rgs) => {
+                Ok(rgs[0].addr)
+            },
+            Message::PickUp {..} => {
+                Err(crypto::NaClError::from("Pickup not expected"))
+            },
+            Message::ForwardPlease {..} => {
+                Err(crypto::NaClError::from("Forward not expected"))
+            },
         }
     }
     loop {
-        match read_one_packet(get, from, my_key) {
+        match read_one_packet(get, my_key, &ob) {
             Ok(sa) => {
                 return sa;
             },
@@ -428,28 +438,8 @@ pub fn start_static_node() -> Result<(), Error> {
 
     let (lopriority, send, get, _) = try!(udp::listen());
 
-    let ob = {
-        let mut hello_payload = [0; PAYLOAD_LENGTH];
-        Message::Greetings(construct_gift(&addresses)).bytes(&mut hello_payload);
-
-        let mut keys_and_routes = [(bingley_gift.key, [0; ROUTING_LENGTH])];
-        let mut ri = RoutingInfo::new(bingley_gift.addr, 60);
-        ri.is_for_me = true;
-        ri.who_am_i = true;
-        ri.bytes(&mut keys_and_routes[0].1);
-
-        let mut ob = onionbox(&keys_and_routes, 0).unwrap();
-        ob.add_payload(my_key, &hello_payload);
-
-        lopriority.send(udp::RawEncryptedMessage{
-            ip: bingley_gift.addr,
-            data: ob.packet(),
-        }).unwrap();
-        ob
-    };
-
     let _my_addr = if my_key.public != bingley().key {
-        wait_for_who_i_am(&get, &bingley(), &my_key)
+        query_who_i_am(&lopriority, &get, &bingley(), &my_key)
     } else {
         bingley().addr
     };
@@ -490,14 +480,15 @@ pub fn start_static_node() -> Result<(), Error> {
                 }
             },
             _ =>
-                match ob.read_return(my_key, &packet.data) {
-                    Ok(_msg) => {
-                        println!("Response!");
-                    },
-                    _ => {
-                        println!("Message illegible!");
-                    },
-                },
+                // match ob.read_return(my_key, &packet.data) {
+                //     Ok(_msg) => {
+                //         println!("Response!");
+                //     },
+                //     _ => {
+                //         println!("Message illegible!");
+                //     },
+                // },
+                unimplemented!()
         }
     }
     // lopriority.send();
