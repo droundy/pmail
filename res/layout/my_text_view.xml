@@ -1,6 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
-<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+              android:orientation="horizontal"
               android:layout_width="match_parent"
-              android:layout_height="40sp"
-              android:text="Hello World, you are awesome!"
-              />
+              android:layout_height="match_parent"
+              >
+  <TextView android:layout_width="35dp"
+            android:layout_height="35sp"
+            android:layout_margin="2.5sp"
+            android:text="Oops"
+            android:background="@color/primary_light"
+            />
+  <TextView android:id="@+id/my_text"
+            android:layout_weight="1"
+            android:layout_width="0dp"
+            android:layout_height="40sp"
+            android:text="Hello World, you are awesome!"
+            />
+</LinearLayout>

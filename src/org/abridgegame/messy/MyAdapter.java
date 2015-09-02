@@ -16,12 +16,20 @@ public class MyAdapter extends RecyclerView.Adapter<MyAdapter.ViewHolder> {
     // Provide a reference to the views for each data item
     // Complex data items may need more than one view per item, and
     // you provide access to all the views for a data item in a view holder
-    public static class ViewHolder extends RecyclerView.ViewHolder {
+    public static class ViewHolder extends RecyclerView.ViewHolder
+        implements View.OnClickListener {
         // each data item is just a string in this case
         public TextView mTextView;
-        public ViewHolder(TextView v) {
+        public String[] mDataset;
+        public ViewHolder(View v) {
             super(v);
-            mTextView = v;
+            v.setOnClickListener(this);
+            mTextView = (TextView) v.findViewById(R.id.my_text);
+        }
+        @Override
+        public void onClick(View v) {
+            //mDataset[(int) getItemId()] = "has been clicked";
+            mTextView.setText("has been clicked");
         }
     }
 
@@ -39,7 +47,7 @@ public class MyAdapter extends RecyclerView.Adapter<MyAdapter.ViewHolder> {
                                .inflate(R.layout.my_text_view, parent, false);
         // set the view's size, margins, paddings and layout parameters
         // ...
-        ViewHolder vh = new ViewHolder((TextView) v);
+        ViewHolder vh = new ViewHolder(v);
         return vh;
     }
 
@@ -48,8 +56,8 @@ public class MyAdapter extends RecyclerView.Adapter<MyAdapter.ViewHolder> {
     public void onBindViewHolder(ViewHolder holder, int position) {
         // - get element from your dataset at this position
         // - replace the contents of the view with that element
+        holder.mDataset = mDataset;
         holder.mTextView.setText(mDataset[position]);
-
     }
 
     // Return the size of your dataset (invoked by the layout manager)
