@@ -3,17 +3,22 @@
               android:orientation="horizontal"
               android:layout_width="match_parent"
               android:layout_height="match_parent"
+              android:background="@drawable/touchy"
               >
   <TextView android:layout_width="35dp"
             android:layout_height="35sp"
             android:layout_margin="2.5sp"
-            android:text="Oops"
-            android:background="@color/primary_light"
+            android:textSize="25sp"
+            android:gravity="center"
+            android:text="⚛"
+            android:textColor="@color/accent"
+            android:background="@color/primary"
             />
   <TextView android:id="@+id/my_text"
             android:layout_weight="1"
             android:layout_width="0dp"
             android:layout_height="40sp"
+            android:textColor="@color/touchy"
             android:text="Hello World, you are awesome!"
             />
 </LinearLayout>

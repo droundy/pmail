@@ -21,6 +21,7 @@ public class MyAdapter extends RecyclerView.Adapter<MyAdapter.ViewHolder> {
         // each data item is just a string in this case
         public TextView mTextView;
         public String[] mDataset;
+        public int my_position;
         public ViewHolder(View v) {
             super(v);
             v.setOnClickListener(this);
@@ -28,8 +29,8 @@ public class MyAdapter extends RecyclerView.Adapter<MyAdapter.ViewHolder> {
         }
         @Override
         public void onClick(View v) {
-            //mDataset[(int) getItemId()] = "has been clicked";
-            mTextView.setText("has been clicked");
+            mDataset[my_position] += "has been clicked";
+            mTextView.setText(mDataset[my_position]);
         }
     }
 
@@ -57,6 +58,7 @@ public class MyAdapter extends RecyclerView.Adapter<MyAdapter.ViewHolder> {
         // - get element from your dataset at this position
         // - replace the contents of the view with that element
         holder.mDataset = mDataset;
+        holder.my_position = position;
         holder.mTextView.setText(mDataset[position]);
     }
 
