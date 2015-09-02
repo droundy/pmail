@@ -415,7 +415,6 @@ pub fn query_who_i_am(lopriority: &SyncSender<udp::RawEncryptedMessage>,
                        my_key: &crypto::KeyPair,
                        ob: &onionsalt::OnionBox) -> Result<SocketAddr, crypto::NaClError> {
         let packet = try!(get.recv());
-        println!("I got {:?}\n", packet);
         let resp = try!(ob.read_return(*my_key, &packet.data));
         println!("Packet has valid encryption.");
         match Message::from_bytes(&resp) {
@@ -461,22 +460,22 @@ pub fn start_static_node() -> Result<(), Error> {
     };
     let my_key = read_or_generate_keypair(keydirname).unwrap();
 
-    let (lopriority, send, get, _) = try!(udp::listen());
+    let (lopriority, _send, get, _) = try!(udp::listen());
 
-    let _my_addr = if my_key.public != bingley().key {
+    let my_addr = if my_key.public != bingley().key {
         query_who_i_am(&lopriority, &get, &bingley(), &my_key)
     } else {
         bingley().addr
     };
+    println!("My address is {}, also known as {:?}", my_addr, my_addr);
 
     // When we send messages, we should store their OnionBoxen in this
     // map, so we can listen for the return...
     let mut onionboxen: HashMap<[u8; 32], onionsalt::OnionBox> = HashMap::new();
 
     for packet in get.iter() {
-        println!("I got {:?}\n", packet);
         match onionbox_open(&packet.data, &my_key.secret) {
-            Ok(oob) => {
+            Ok(mut oob) => {
                 let routing = RoutingInfo::from_bytes(&oob.routing());
                 println!("It's for me! {:?}", routing);
                 if routing.is_for_me {
@@ -491,17 +490,11 @@ pub fn start_static_node() -> Result<(), Error> {
                                 let mut gift = construct_gift(&addresses);
                                 gift[0] = RoutingGift{ addr: packet.ip,
                                                        key: oob.key() };
-                                Message::Greetings(gift).bytes(&mut you_are);
-                                let mut keys_and_routes = [(oob.key(), [0; ROUTING_LENGTH])];
-                                let mut ri = RoutingInfo::new(packet.ip, 60);
-                                ri.is_for_me = true;
-                                ri.who_am_i = true;
-                                ri.bytes(&mut keys_and_routes[0].1);
-                                let mut ob = onionbox(&keys_and_routes, 0).unwrap();
-                                ob.add_payload(my_key, &you_are);
-                                send.send(udp::RawEncryptedMessage{
+                                Message::Response(gift).bytes(&mut you_are);
+                                oob.respond(&my_key, &you_are);
+                                lopriority.send(udp::RawEncryptedMessage{
                                     ip: packet.ip,
-                                    data: ob.packet(),
+                                    data: oob.packet(),
                                 }).unwrap();
                             }
                         }

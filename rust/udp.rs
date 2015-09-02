@@ -129,7 +129,7 @@ pub fn listen() -> Result<(SyncSender<RawEncryptedMessage>,
                 }
             };
             send_now.recv().unwrap();
-            println!("I should be sending {:?}", m);
+            println!("Sending to {}", m.ip);
             match send_socket.send_to(&m.data, &m.ip) {
                 Ok(sent) => {
                     if sent != PACKET_LENGTH {
