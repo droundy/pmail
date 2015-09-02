@@ -469,6 +469,10 @@ pub fn start_static_node() -> Result<(), Error> {
         bingley().addr
     };
 
+    // When we send messages, we should store their OnionBoxen in this
+    // map, so we can listen for the return...
+    let mut onionboxen: HashMap<[u8; 32], onionsalt::OnionBox> = HashMap::new();
+
     for packet in get.iter() {
         println!("I got {:?}\n", packet);
         match onionbox_open(&packet.data, &my_key.secret) {
@@ -504,16 +508,28 @@ pub fn start_static_node() -> Result<(), Error> {
                     }
                 }
             },
-            _ =>
-                // match ob.read_return(my_key, &packet.data) {
-                //     Ok(_msg) => {
-                //         println!("Response!");
-                //     },
-                //     _ => {
-                //         println!("Message illegible!");
-                //     },
-                // },
-                unimplemented!()
+            _ => {
+                let maybe_msg = match onionboxen.get(array_ref![packet.data,0,32]) {
+                    Some(ob) =>
+                        match ob.read_return(my_key, &packet.data) {
+                            Ok(msg) => {
+                                println!("Response! (Which I am about to ignore)");
+                                Some(msg)
+                            },
+                            _ => {
+                                println!("Message illegible!");
+                                None
+                            },
+                        },
+                    None => {
+                        println!("Not sure what that was!");
+                        None
+                    },
+                };
+                if maybe_msg.is_some() {
+                    onionboxen.remove(array_ref![packet.data,0,32]);
+                }
+            },
         }
     }
     // lopriority.send();
