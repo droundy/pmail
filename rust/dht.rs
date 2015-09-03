@@ -13,7 +13,7 @@ use std;
 use super::udp;
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::mpsc::{Receiver, SyncSender};
+use std::sync::{Arc,Mutex};
 
 trait MyBytes<T> {
     fn bytes(&self, &mut T);
@@ -57,16 +57,16 @@ impl MyBytes<[u8; 18]> for SocketAddr {
         if inp[0] == 0 && inp[1] == 0 {
             SocketAddr::V4(SocketAddrV4::new(
                 Ipv4Addr::new(inp[4], inp[5], inp[6], inp[7]),
-                inp[2] as u16 + (inp[3] as u16) << 8))
+                u16::from_bytes(array_ref![inp,2,2])))
         } else {
             let mut addr = [0; 8];
             for i in 0..8 {
-                addr[i] = inp[2 + 2*i] as u16 + ((inp[2 + 2*i+1] as u16) << 8);
+                addr[i] = u16::from_bytes(array_ref![inp,2 + 2*i, 2]);
             }
             SocketAddr::V6(SocketAddrV6::new(
                 Ipv6Addr::new(addr[0],addr[1],addr[2],addr[3],
                               addr[4],addr[5],addr[6],addr[7]),
-                inp[0] as u16 + (inp[1] as u16) << 8, 0, 0))
+                u16::from_bytes(array_ref![inp,0,2]), 0, 0))
         }
     }
 }
@@ -381,31 +381,8 @@ fn bingley() -> RoutingGift {
     RoutingGift { addr: bingley_addr, key: bingley_key }
 }
 
-fn construct_gift(addrmap: &HashMap<crypto::PublicKey, SocketAddr>)
-                  -> [RoutingGift; NUM_IN_RESPONSE] {
-    let mut out = [bingley(); NUM_IN_RESPONSE];
-    let mut i = 0;
-    for k in addrmap.keys() {
-        out[i] = RoutingGift {
-            addr: addrmap[k],
-            key: *k,
-        };
-        i += 1;
-        if i <= NUM_IN_RESPONSE {
-            break;
-        }
-    }
-    while i < NUM_IN_RESPONSE {
-        out[i] = out[0];
-        i += 1;
-    }
-    out
-}
-
-pub fn query_who_i_am(lopriority: &SyncSender<udp::RawEncryptedMessage>,
-                      get: &Receiver<udp::RawEncryptedMessage>,
-                      who: &RoutingGift,
-                      my_key: &crypto::KeyPair) -> SocketAddr {
+fn prepare_greetings(who: &RoutingGift,
+                     my_key: &crypto::KeyPair) -> (SocketAddr, onionsalt::OnionBox) {
     let mut hello_payload = [0; PAYLOAD_LENGTH];
     Message::Greetings([*who; NUM_IN_RESPONSE]).bytes(&mut hello_payload);
 
@@ -417,73 +394,114 @@ pub fn query_who_i_am(lopriority: &SyncSender<udp::RawEncryptedMessage>,
 
     let mut ob = onionbox(&keys_and_routes, 0).unwrap();
     ob.add_payload(*my_key, &hello_payload);
+    (who.addr, ob)
+}
 
-    lopriority.send(udp::RawEncryptedMessage{
-        ip: who.addr,
-        data: ob.packet(),
-    }).unwrap();
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DHT {
+    addresses: HashMap<crypto::PublicKey, SocketAddr>,
+    pubkeys: HashMap<SocketAddr, crypto::PublicKey>,
+    my_key: crypto::KeyPair,
+    /// When we send messages, we should store their OnionBoxen in this
+    /// map, so we can listen for the return...
+    onionboxen: HashMap<[u8; 32], onionsalt::OnionBox>,
+}
 
-    fn read_one_packet(get: &Receiver<udp::RawEncryptedMessage>,
-                       my_key: &crypto::KeyPair,
-                       ob: &onionsalt::OnionBox) -> Result<SocketAddr, crypto::NaClError> {
-        let packet = try!(get.recv());
-        let resp = try!(ob.read_return(*my_key, &packet.data));
-        println!("Packet has valid encryption.");
-        match Message::from_bytes(&resp) {
-            Message::Greetings(_) => {
-                Err(crypto::NaClError::from("Greetings not expected"))
-            },
-            Message::Response(rgs) => {
-                Ok(rgs[0].addr)
-            },
-            Message::PickUp {..} => {
-                Err(crypto::NaClError::from("Pickup not expected"))
-            },
-            Message::ForwardPlease {..} => {
-                Err(crypto::NaClError::from("Forward not expected"))
-            },
+impl DHT {
+    fn new(myself: &crypto::KeyPair) -> Arc<Mutex<DHT>> {
+        let mut dht = DHT {
+            addresses: HashMap::new(),
+            pubkeys: HashMap::new(),
+            onionboxen: HashMap::new(),
+            my_key: *myself,
+        };
+        // initialize a the mappings!
+        dht.accept_single_gift(&bingley());
+        Arc::new(Mutex::new(dht))
+    }
+    fn construct_gift(&self) -> [RoutingGift; NUM_IN_RESPONSE] {
+        let mut out = [bingley(); NUM_IN_RESPONSE];
+        let mut i = 0;
+        for k in self.addresses.keys() {
+            out[i] = RoutingGift {
+                addr: self.addresses[k],
+                key: *k,
+            };
+            i += 1;
+            if i <= NUM_IN_RESPONSE {
+                break;
+            }
+        }
+        while i < NUM_IN_RESPONSE {
+            out[i] = out[0];
+            i += 1;
+        }
+        out
+    }
+    fn accept_single_gift(&mut self, g: &RoutingGift) {
+        self.addresses.insert(g.key, g.addr);
+        self.pubkeys.insert(g.addr, g.key);
+    }
+    fn accept_gift(&mut self, gift: &[RoutingGift; NUM_IN_RESPONSE]) {
+        for g in gift {
+            self.accept_single_gift(g);
         }
     }
-    loop {
-        match read_one_packet(get, my_key, &ob) {
-            Ok(sa) => {
-                return sa;
-            },
-            Err(e) => {
-                println!("Got problem: {:?}", e);
-            },
+    fn random_key(&self, i: usize) -> crypto::PublicKey {
+        let mut keys = self.addresses.keys();
+        let i = i % keys.len();
+        *keys.nth(i).unwrap()
+    }
+    fn random_gift(&self, i: usize) -> RoutingGift {
+        let k = self.random_key(i);
+        RoutingGift { key: k, addr: self.addresses[&k] }
+    }
+    fn maintenance(&self) -> (SocketAddr, onionsalt::OnionBox) {
+        let r = crypto::random_nonce().unwrap().0;
+        let which = r[0] as usize + ((r[1] as usize)<<8) + ((r[2] as usize)<<16);
+        println!("Routing table:");
+        for (k,a) in self.addresses.iter() {
+            println!(" {} -> {}", k, a);
         }
+        prepare_greetings(&self.random_gift(which), &self.my_key)
     }
 }
 
 /// Start relaying messages with a static public key (i.e. one that
 /// does not change).
 pub fn start_static_node() -> Result<(), Error> {
-    let mut addresses = HashMap::new();
-    let mut pubkeys = HashMap::new();
-
-    let bingley_gift = bingley();
-    addresses.insert(bingley_gift.key, bingley_gift.addr);
-    pubkeys.insert(bingley_gift.addr, bingley_gift.key);
-
     let keydirname = match std::env::home_dir() {
         Some(hd) => hd,
         None => std::path::PathBuf::from("."),
     };
     let my_key = read_or_generate_keypair(keydirname).unwrap();
 
-    let (lopriority, _send, get, _) = try!(udp::listen());
+    let dht = DHT::new(&my_key);
 
-    let my_addr = if my_key.public != bingley().key {
-        query_who_i_am(&lopriority, &get, &bingley(), &my_key)
-    } else {
-        bingley().addr
-    };
-    println!("My address is {}, also known as {:?}", my_addr, my_addr);
+    let (lopriority, send, get, _) = try!(udp::listen());
 
-    // When we send messages, we should store their OnionBoxen in this
-    // map, so we can listen for the return...
-    let mut onionboxen: HashMap<[u8; 32], onionsalt::OnionBox> = HashMap::new();
+    {
+        // Here we set up the thread that sends out requests for
+        // routing information.  This thread should wake up no more
+        // than once every 10 seconds (until I increase the
+        // communication frequency), and should ensure that we're
+        // always ready to send *something* out.
+        let dht = dht.clone(); // a separate copy for sending
+                               // maintenance requests.
+        std::thread::spawn(move|| {
+            loop {
+                let (addr,ob) = dht.lock().unwrap().maintenance();
+                let msg = udp::RawEncryptedMessage{
+                    ip: addr,
+                    data: ob.packet(),
+                };
+                // The following enables us to easily check for a response
+                // to this message.
+                dht.lock().unwrap().onionboxen.insert(ob.return_magic(), ob);
+                lopriority.send(msg).unwrap();
+            }
+        });
+    }
 
     for packet in get.iter() {
         match onionbox_open(&packet.data, &my_key.secret) {
@@ -499,12 +517,14 @@ pub fn start_static_node() -> Result<(), Error> {
                             println!("Got lovely payload from {}", packet.ip);
                             if routing.who_am_i {
                                 let mut you_are = [0; PAYLOAD_LENGTH];
-                                let mut gift = construct_gift(&addresses);
+                                let mut gift = dht.lock().unwrap().construct_gift();
                                 gift[0] = RoutingGift{ addr: packet.ip,
                                                        key: oob.key() };
+                                // add the sender to our database of routers
+                                dht.lock().unwrap().accept_single_gift(&gift[0]);
                                 Message::Response(gift).bytes(&mut you_are);
                                 oob.respond(&my_key, &you_are);
-                                lopriority.send(udp::RawEncryptedMessage{
+                                send.send(udp::RawEncryptedMessage{
                                     ip: packet.ip,
                                     data: oob.packet(),
                                 }).unwrap();
@@ -514,11 +534,11 @@ pub fn start_static_node() -> Result<(), Error> {
                 }
             },
             _ => {
-                let maybe_msg = match onionboxen.get(array_ref![packet.data,0,32]) {
+                let maybe_msg = match dht.lock().unwrap().onionboxen.get(array_ref![packet.data,0,32]) {
                     Some(ob) =>
                         match ob.read_return(my_key, &packet.data) {
                             Ok(msg) => {
-                                println!("Response! (Which I am about to ignore)");
+                                println!("Response!");
                                 Some(msg)
                             },
                             _ => {
@@ -531,8 +551,26 @@ pub fn start_static_node() -> Result<(), Error> {
                         None
                     },
                 };
+                match maybe_msg.map(|x| { Message::from_bytes(&x) }) {
+                    None => (),
+                    Some(Message::Greetings(_)) => {
+                        println!("Greetings not a valid response");
+                    },
+                    Some(Message::Response(rgs)) => {
+                        dht.lock().unwrap().accept_gift(&rgs);
+                        if rgs[0].key == my_key.public {
+                            println!("My address is {}", rgs[0].addr);
+                        }
+                    },
+                    Some(Message::PickUp {..}) => {
+                        println!("Pickup not yet handled");
+                    },
+                    Some(Message::ForwardPlease {..}) => {
+                        println!("Forward not yet handled");
+                    },
+                }
                 if maybe_msg.is_some() {
-                    onionboxen.remove(array_ref![packet.data,0,32]);
+                    dht.lock().unwrap().onionboxen.remove(array_ref![packet.data,0,32]);
                 }
             },
         }

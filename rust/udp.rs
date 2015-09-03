@@ -118,7 +118,7 @@ pub fn listen() -> Result<(SyncSender<RawEncryptedMessage>,
         // or low-priority message from watching us.  I also assume
         // that there will always be a low-priority message available.
         // That is a responsibility of the dht module.
-        let (send_now, send_warning) = double_timer(1000, 100);
+        let (send_now, send_warning) = double_timer(10000, 100);
         for _ in send_warning.iter() {
             let m: RawEncryptedMessage = if let Ok(message) = rs.try_recv() {
                 message
@@ -200,6 +200,11 @@ fn double_timer(ms: u32, ms_warning: u32) -> (Receiver<()>, Receiver<()>) {
             if tx_warning.send(()).is_err() {
                 break;
             }
+            // FIXME this sleep really ought to keep track of the
+            // target time, and sleep the correct amount of time, such
+            // that we don't give away the time spent doing the
+            // previous check, which could be affected by CPU
+            // contention.
             std::thread::sleep_ms(ms_warning);
             if tx.send(()).is_err() {
                 break;
