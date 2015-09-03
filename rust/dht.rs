@@ -14,6 +14,8 @@ use super::udp;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::{Arc,Mutex};
+use std::sync::mpsc::{Sender};
+use std::thread;
 
 trait MyBytes<T> {
     fn bytes(&self, &mut T);
@@ -396,11 +398,14 @@ struct DHT {
 fn codename(text: &[u8]) -> String {
     let adjectives = ["good", "happy", "nice", "evil", "sloppy", "slovenly",
                       "meticulous", "beloved", "hateful", "green", "lovely",
+                      "corporate", "presidential", "stately", "serene",
+                      "indignant", "exciting", "one", "fluffy",
                       "sour", "hot", "sexy", "absent minded", "considerate"];
     let nouns = ["warthog", "vampire", "person", "nemesis", "pooch",
                  "superhero", "scientist", "writer", "author", "oboist",
                  "physicist", "musicologist", "teacher", "professor",
-                 "squirrel", "deer", "beaver", "duck",
+                 "squirrel", "deer", "beaver", "duck", "poodle",
+                 "republican", "democrat",
                  "bunny", "cat", "kitty", "boy", "girl", "man", "woman"];
     if text.len() < 2 {
         return format!("{:?}", text);
@@ -597,10 +602,10 @@ pub fn start_static_node() -> Result<(), Error> {
                                 dht.lock().unwrap().accept_single_gift(&gift[0]);
                                 Message::Response(gift).bytes(&mut you_are);
                                 oob.respond(&my_key, &you_are);
-                                send.send(udp::RawEncryptedMessage{
+                                send_delayed(&send, routing.eta, &udp::RawEncryptedMessage{
                                     ip: packet.ip,
                                     data: oob.packet(),
-                                }).unwrap();
+                                });
                             } else {
                                 match Message::from_bytes(&payload) {
                                     Message::Greetings(gs) => {
@@ -611,10 +616,10 @@ pub fn start_static_node() -> Result<(), Error> {
                                         let gift = dht.lock().unwrap().construct_gift();
                                         Message::Response(gift).bytes(&mut response);
                                         oob.respond(&my_key, &response);
-                                        send.send(udp::RawEncryptedMessage{
+                                        send_delayed(&send, routing.eta, &udp::RawEncryptedMessage{
                                             ip: routing.ip,
                                             data: oob.packet(),
-                                        }).unwrap();
+                                        });
                                     },
                                     _ => {
                                         println!("Something else for me!\n\n");
@@ -627,10 +632,10 @@ pub fn start_static_node() -> Result<(), Error> {
                     // This is a packet that we should relay along.
                     println!("I am relaying packet {} -> {}",
                              packet.ip, routing.ip);
-                    send.send(udp::RawEncryptedMessage{
+                    send_delayed(&send, routing.eta, &udp::RawEncryptedMessage{
                         ip: routing.ip,
                         data: oob.packet(),
-                    }).unwrap();
+                    });
                 }
             },
             _ => {
@@ -678,4 +683,22 @@ pub fn start_static_node() -> Result<(), Error> {
     }
     // lopriority.send();
     Ok(())
+}
+
+fn send_delayed(send: &Sender<udp::RawEncryptedMessage>,
+                eta: u32, msg: &udp::RawEncryptedMessage) {
+    let n = now();
+    let delay = if eta < n { 0 } else { eta - n };
+    if delay == 0 {
+        println!("Send is late by {} seconds!", n - eta);
+        send.send(*msg).unwrap();
+    } else {
+        println!("Delaying send by {} seconds", delay);
+        let msg = *msg;
+        let send = send.clone();
+        thread::spawn(move|| {
+            thread::sleep_ms(delay*1000);
+            send.send(msg).unwrap();
+        });
+    }
 }

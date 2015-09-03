@@ -129,7 +129,7 @@ pub fn listen() -> Result<(SyncSender<RawEncryptedMessage>,
                 }
             };
             send_now.recv().unwrap();
-            println!("Sending to {}", m.ip);
+            // println!("Sending to {}", m.ip);
             match send_socket.send_to(&m.data, &m.ip) {
                 Ok(sent) => {
                     if sent != PACKET_LENGTH {
@@ -153,7 +153,7 @@ pub fn listen() -> Result<(SyncSender<RawEncryptedMessage>,
             // have gone down, and we should exit this thread.
             let (amt, src) = socket.recv_from(&mut buf).unwrap();
             if amt == PACKET_LENGTH {
-                println!("I got a packet from {}", src);
+                // println!("I got a packet from {}", src);
                 if let Err(e) = tr.send(RawEncryptedMessage{ ip: src, data: buf }) {
                     // When no one is listending for messages, we may
                     // as well shut down our listener.
