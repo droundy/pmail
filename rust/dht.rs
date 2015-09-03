@@ -24,6 +24,18 @@ impl MyBytes<[u8; 18]> for SocketAddr {
     fn bytes(&self, out: &mut[u8; 18]) {
         match *self {
             SocketAddr::V6(sa) => {
+                // is it an IPv4-mapped IPv6 address?
+                match sa.ip().to_ipv4() {
+                    None => (),
+                    Some(ipv4) => {
+                        for i in 0..18 {
+                            out[i] = 0;
+                        }
+                        sa.port().bytes(array_mut_ref![out, 2, 2]);
+                        *array_mut_ref![out,4,4] = ipv4.octets();
+                        return;
+                    },
+                }
                 let (port, a, b, c, d, e, f, g, h) = mut_array_refs!(out, 2,
                                                                      2,2,2,2,
                                                                      2,2,2,2);
