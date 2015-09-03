@@ -381,30 +381,32 @@ fn bingley() -> RoutingGift {
     RoutingGift { addr: bingley_addr, key: bingley_key }
 }
 
-fn prepare_greetings(who: &RoutingGift,
-                     my_key: &crypto::KeyPair) -> (SocketAddr, onionsalt::OnionBox) {
-    let mut hello_payload = [0; PAYLOAD_LENGTH];
-    Message::Greetings([*who; NUM_IN_RESPONSE]).bytes(&mut hello_payload);
-
-    let mut keys_and_routes = [(who.key, [0; ROUTING_LENGTH])];
-    let mut ri = RoutingInfo::new(who.addr, 60);
-    ri.is_for_me = true;
-    ri.who_am_i = true;
-    ri.bytes(&mut keys_and_routes[0].1);
-
-    let mut ob = onionbox(&keys_and_routes, 0).unwrap();
-    ob.add_payload(*my_key, &hello_payload);
-    (who.addr, ob)
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct DHT {
+    // has_been_seen: HashMap<crypto::PublicKey, u32>,
+    // never_seen: HashSet<crypto::PublicKey>,
     addresses: HashMap<crypto::PublicKey, SocketAddr>,
     pubkeys: HashMap<SocketAddr, crypto::PublicKey>,
     my_key: crypto::KeyPair,
     /// When we send messages, we should store their OnionBoxen in this
     /// map, so we can listen for the return...
     onionboxen: HashMap<[u8; 32], onionsalt::OnionBox>,
+}
+
+fn codename(text: &[u8]) -> String {
+    let adjectives = ["good", "happy", "nice", "evil", "sloppy", "slovenly",
+                      "meticulous", "beloved", "hateful", "green", "lovely",
+                      "sour", "hot", "sexy", "absent minded", "considerate"];
+    let nouns = ["warthog", "vampire", "person", "nemesis", "pooch",
+                 "superhero", "scientist", "writer", "author", "oboist",
+                 "physicist", "musicologist", "teacher", "professor",
+                 "squirrel", "deer", "beaver", "duck",
+                 "bunny", "cat", "kitty", "boy", "girl", "man", "woman"];
+    if text.len() < 2 {
+        return format!("{:?}", text);
+    }
+    format!("{} {}", adjectives[text[0] as usize % adjectives.len()],
+            nouns[text[1] as usize % nouns.len()])
 }
 
 impl DHT {
@@ -450,12 +452,92 @@ impl DHT {
         let r = crypto::random_nonce().unwrap().0;
         r[0] as usize + ((r[1] as usize)<<8) + ((r[2] as usize)<<16)
     }
-    fn maintenance(&mut self) -> (SocketAddr, onionsalt::OnionBox) {
-        println!("Routing table:");
-        for (k,a) in self.addresses.iter() {
-            println!(" {} -> {}", k, a);
+    fn pick_route(&mut self) -> Vec<RoutingGift> {
+        let mut out = Vec::new();
+        let mut old_gift = RoutingGift {
+            key: self.my_key.public,
+            addr: self.addresses[&self.my_key.public],
+        };
+        for _ in 0 .. 3 + (self.random_usize() % 4) {
+            let mut new_gift = self.random_gift();
+            while new_gift.key == old_gift.key {
+                new_gift = self.random_gift();
+            }
+            if new_gift.key == self.my_key.public {
+                // There is no point creating a loop that passes
+                // *through* myself.
+                return out;
+            }
+            out.push(new_gift);
+            old_gift = new_gift;
         }
-        prepare_greetings(&self.random_gift(), &self.my_key)
+        out
+    }
+    fn greet(&mut self) -> (SocketAddr, onionsalt::OnionBox) {
+        let mut payload = [0; PAYLOAD_LENGTH];
+        Message::Greetings(self.construct_gift()).bytes(&mut payload);
+
+        let route = self.pick_route();
+        let mut recipient = self.random_usize() % route.len();
+        // avoid sending greetings to myself!
+        while route[recipient].key == self.my_key.public {
+            recipient = self.random_usize() % route.len();
+        }
+        println!("\nSending a nice greeting loop of length {}", route.len());
+        let mut keys_and_routes = Vec::new();
+        let mut delay_time = 0;
+        for i in 0 .. route.len() {
+            let mut k_and_r = (route[i].key, [0; ROUTING_LENGTH]);
+            let next_addr = if i < route.len()-1 {
+                route[i+1].addr
+            } else {
+                self.addresses[&self.my_key.public]
+            };
+            if i == recipient {
+                println!(" => {}", route[i].addr);
+            } else {
+                println!("    {}", route[i].addr);
+            }
+            delay_time += 10 + self.random_usize() as u32 % 60;
+            let mut ri = RoutingInfo::new(next_addr, delay_time);
+            ri.is_for_me = i == recipient;
+            ri.who_am_i = false;
+            ri.bytes(&mut k_and_r.1);
+            keys_and_routes.push(k_and_r);
+        }
+
+        let mut ob = onionbox(&keys_and_routes, recipient).unwrap();
+        ob.add_payload(self.my_key, &payload);
+        println!("greeting code name: {}\n", codename(&ob.return_magic()));
+        (route[0].addr, ob)
+    }
+    fn whoami(&mut self, who: &RoutingGift) -> (SocketAddr, onionsalt::OnionBox) {
+        println!("Sending a whoami to {}", who.addr);
+        let mut hello_payload = [0; PAYLOAD_LENGTH];
+        Message::Greetings([*who; NUM_IN_RESPONSE]).bytes(&mut hello_payload);
+
+        let mut keys_and_routes = [(who.key, [0; ROUTING_LENGTH])];
+        let mut ri = RoutingInfo::new(who.addr, 60);
+        ri.is_for_me = true;
+        ri.who_am_i = true;
+        ri.bytes(&mut keys_and_routes[0].1);
+
+        let mut ob = onionbox(&keys_and_routes, 0).unwrap();
+        ob.add_payload(self.my_key, &hello_payload);
+        println!("whoami code name: {}\n", codename(&ob.return_magic()));
+        (who.addr, ob)
+    }
+
+    fn maintenance(&mut self) -> (SocketAddr, onionsalt::OnionBox) {
+        if !self.addresses.contains_key(&self.my_key.public) || self.addresses.len() < 2 || self.random_usize() % 10 == 0 {
+            println!("Routing table:");
+            for (k,a) in self.addresses.iter() {
+                println!(" {} -> {}", k, a);
+            }
+            let gift = self.random_gift();
+            return self.whoami(&gift);
+        }
+        self.greet()
     }
 }
 
@@ -499,15 +581,14 @@ pub fn start_static_node() -> Result<(), Error> {
         match onionbox_open(&packet.data, &my_key.secret) {
             Ok(mut oob) => {
                 let routing = RoutingInfo::from_bytes(&oob.routing());
-                println!("It's for me! {:?}", routing);
                 if routing.is_for_me {
                     match oob.payload(&my_key) {
                         Err(e) => {
                             println!("Unable to read message! {:?}", e);
                         },
-                        Ok(_payload) => {
-                            println!("Got lovely payload from {}", packet.ip);
+                        Ok(payload) => {
                             if routing.who_am_i {
+                                println!("Got whoami from {}", packet.ip);
                                 let mut you_are = [0; PAYLOAD_LENGTH];
                                 let mut gift = dht.lock().unwrap().construct_gift();
                                 gift[0] = RoutingGift{ addr: packet.ip,
@@ -520,9 +601,36 @@ pub fn start_static_node() -> Result<(), Error> {
                                     ip: packet.ip,
                                     data: oob.packet(),
                                 }).unwrap();
+                            } else {
+                                match Message::from_bytes(&payload) {
+                                    Message::Greetings(gs) => {
+                                        dht.lock().unwrap().accept_gift(&gs);
+                                        println!("Got greeting from {}", packet.ip);
+
+                                        let mut response = [0; PAYLOAD_LENGTH];
+                                        let gift = dht.lock().unwrap().construct_gift();
+                                        Message::Response(gift).bytes(&mut response);
+                                        oob.respond(&my_key, &response);
+                                        send.send(udp::RawEncryptedMessage{
+                                            ip: routing.ip,
+                                            data: oob.packet(),
+                                        }).unwrap();
+                                    },
+                                    _ => {
+                                        println!("Something else for me!\n\n");
+                                    },
+                                }
                             }
                         }
                     }
+                } else {
+                    // This is a packet that we should relay along.
+                    println!("I am relaying packet {} -> {}",
+                             packet.ip, routing.ip);
+                    send.send(udp::RawEncryptedMessage{
+                        ip: routing.ip,
+                        data: oob.packet(),
+                    }).unwrap();
                 }
             },
             _ => {
@@ -530,7 +638,8 @@ pub fn start_static_node() -> Result<(), Error> {
                     Some(ob) =>
                         match ob.read_return(my_key, &packet.data) {
                             Ok(msg) => {
-                                println!("Response!");
+                                println!("Response to code name {}!",
+                                         codename(array_ref![packet.data,0,32]));
                                 Some(msg)
                             },
                             _ => {
@@ -539,7 +648,7 @@ pub fn start_static_node() -> Result<(), Error> {
                             },
                         },
                     None => {
-                        println!("Not sure what that was!");
+                        println!("Not sure what that was! (from {})", packet.ip);
                         None
                     },
                 };
