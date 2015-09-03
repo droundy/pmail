@@ -419,22 +419,10 @@ impl DHT {
         dht.accept_single_gift(&bingley());
         Arc::new(Mutex::new(dht))
     }
-    fn construct_gift(&self) -> [RoutingGift; NUM_IN_RESPONSE] {
+    fn construct_gift(&mut self) -> [RoutingGift; NUM_IN_RESPONSE] {
         let mut out = [bingley(); NUM_IN_RESPONSE];
-        let mut i = 0;
-        for k in self.addresses.keys() {
-            out[i] = RoutingGift {
-                addr: self.addresses[k],
-                key: *k,
-            };
-            i += 1;
-            if i <= NUM_IN_RESPONSE {
-                break;
-            }
-        }
-        while i < NUM_IN_RESPONSE {
-            out[i] = out[0];
-            i += 1;
+        for i in 0..NUM_IN_RESPONSE {
+            out[i] = self.random_gift();
         }
         out
     }
@@ -447,23 +435,27 @@ impl DHT {
             self.accept_single_gift(g);
         }
     }
-    fn random_key(&self, i: usize) -> crypto::PublicKey {
+    fn random_key(&mut self) -> crypto::PublicKey {
+        let i = self.random_usize() % self.addresses.len();
         let mut keys = self.addresses.keys();
-        let i = i % keys.len();
         *keys.nth(i).unwrap()
     }
-    fn random_gift(&self, i: usize) -> RoutingGift {
-        let k = self.random_key(i);
+    fn random_gift(&mut self) -> RoutingGift {
+        let k = self.random_key();
         RoutingGift { key: k, addr: self.addresses[&k] }
     }
-    fn maintenance(&self) -> (SocketAddr, onionsalt::OnionBox) {
+    fn random_usize(&mut self) -> usize {
+        // The following is a really stupid way of getting a random
+        // usize so that we will send to a random node each time.
         let r = crypto::random_nonce().unwrap().0;
-        let which = r[0] as usize + ((r[1] as usize)<<8) + ((r[2] as usize)<<16);
+        r[0] as usize + ((r[1] as usize)<<8) + ((r[2] as usize)<<16)
+    }
+    fn maintenance(&mut self) -> (SocketAddr, onionsalt::OnionBox) {
         println!("Routing table:");
         for (k,a) in self.addresses.iter() {
             println!(" {} -> {}", k, a);
         }
-        prepare_greetings(&self.random_gift(which), &self.my_key)
+        prepare_greetings(&self.random_gift(), &self.my_key)
     }
 }
 
