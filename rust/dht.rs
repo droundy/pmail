@@ -495,8 +495,8 @@ pub fn start_static_node() -> Result<(), Error> {
                         Err(e) => {
                             println!("Unable to read message! {:?}", e);
                         },
-                        Ok(payload) => {
-                            println!("Got lovely payload {:?}", &payload[0..]);
+                        Ok(_payload) => {
+                            println!("Got lovely payload from {}", packet.ip);
                             if routing.who_am_i {
                                 let mut you_are = [0; PAYLOAD_LENGTH];
                                 let mut gift = construct_gift(&addresses);
