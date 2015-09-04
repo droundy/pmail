@@ -332,6 +332,14 @@ fn bingley() -> RoutingGift {
                                          227, 172, 76, 45]);
     RoutingGift { addr: bingley_addr, key: bingley_key }
 }
+fn wentworth() -> RoutingGift {
+    let addr = SocketAddr::from_str("128.193.96.92:54321").unwrap();
+    let key = crypto::PublicKey([11, 240, 145, 18, 32, 184, 142, 166,
+                                 33, 129, 115, 50, 104, 216, 55, 157,
+                                 7, 182, 234, 184, 171, 156, 145, 40,
+                                 165, 46, 88, 109, 211, 239, 22, 106]);
+    RoutingGift { addr: addr, key: key }
+}
 
 fn codename(text: &[u8]) -> String {
     let adjectives = ["good", "happy", "nice", "evil", "sloppy", "slovenly",
@@ -392,6 +400,7 @@ impl DHT {
         }));
         // initialize a the mappings!
         dht.lock().unwrap().accept_single_gift(&bingley());
+        dht.lock().unwrap().accept_single_gift(&wentworth());
         dht
     }
     fn construct_gift(&mut self) -> [RoutingGift; NUM_IN_RESPONSE] {
