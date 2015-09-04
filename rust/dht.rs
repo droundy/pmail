@@ -1,5 +1,3 @@
-extern crate time;
-
 use std::net::{SocketAddr, SocketAddrV6, SocketAddrV4,
                Ipv6Addr, Ipv4Addr};
 use onionsalt;
@@ -15,8 +13,6 @@ use super::udp;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::{Arc,Mutex};
-use std::sync::mpsc::{Sender};
-use std::thread;
 
 trait MyBytes<T> {
     fn bytes(&self, &mut T);
@@ -248,56 +244,9 @@ impl MyBytes<[u8; PAYLOAD_LENGTH]> for Message {
 }
 
 
-// impl Message {
-//     fn encrypted_bytes(&self,
-//                        n: crypto::Nonce,
-//                        to: crypto::PublicKey,
-//                        from: crypto::KeyPair) -> [u8; PAYLOAD_LENGTH] {
-//         let mut plain = [0; PAYLOAD_LENGTH - 16];
-//         // FIXME fill up plain here with the actual content to send.
-//         let mut out = [0; PAYLOAD_LENGTH];
-//         crypto::box_up(array_mut_ref![out, 16, u8, PAYLOAD_LENGTH-16],
-//                        &plain, &n, &to, from.secret).unwrap();
-//         *array_mut_ref![out, 0, u8, 32] = from.public.0;
-//         out
-//     }
-//     fn encrypt(&self,
-//                to: crypto::PublicKey,
-//                from: crypto::KeyPair,
-//                addresses: HashMap<crypto::PublicKey, Addr>) -> RawEncryptedMessage {
-//         match self.contents {
-//             Greetings(gift) => {
-//                 let pk = crypto::box_keypair();
-//                 let payload = self.encrypted_bytes(crypto::Nonce(pk.public.0), to, from);
-//                 let ob = onionsalt::onionbox(&[(to, RoutingInfo::empty(20).bytes())],
-//                                              &payload, 0, &pk).unwrap();
-//                 ob.packet();
-//             },
-//             _ => {
-//                 unimplemented!();
-//             },
-//         }
-//     }
-// }
-
-/// The `EPOCH` is when time begins.  We have not facilities for
-/// sending messages prior to this time.  However, we also do not
-/// promise never to change `EPOCH`.  It may be changed in a future
-/// version of the protocol in order to avoid a Y2K-like problem.
-/// Therefore, `EPOCH`-difference times should not be stored on disk,
-/// and should only be sent over the network.  It is also possible
-/// that future changes will needlessly change `EPOCH` (but only while
-/// making other network protool changes) simply to flush out
-/// buggy use of thereof.
-const EPOCH: time::Timespec = time::Timespec { sec: 1420092000, nsec: 0 };
-
-pub fn now() -> u32 {
-    (time::get_time().sec - EPOCH.sec) as u32
-}
-
 impl RoutingInfo {
     pub fn new(saddr: SocketAddr, delay_time: u32) -> RoutingInfo {
-        let eta = now() + delay_time;
+        let eta = (udp::now_ms()/1000+1) as u32 + delay_time;
         RoutingInfo {
             ip: saddr,
             eta: eta,
@@ -384,16 +333,6 @@ fn bingley() -> RoutingGift {
     RoutingGift { addr: bingley_addr, key: bingley_key }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct DHT {
-    addresses: HashMap<crypto::PublicKey, SocketAddr>,
-    pubkeys: HashMap<SocketAddr, crypto::PublicKey>,
-    my_key: crypto::KeyPair,
-    /// When we send messages, we should store their OnionBoxen in this
-    /// map, so we can listen for the return...
-    onionboxen: HashMap<[u8; 32], onionsalt::OnionBox>,
-}
-
 fn codename(text: &[u8]) -> String {
     let adjectives = ["good", "happy", "nice", "evil", "sloppy", "slovenly",
                       "meticulous", "beloved", "hateful", "green", "lovely",
@@ -413,17 +352,36 @@ fn codename(text: &[u8]) -> String {
             nouns[text[1] as usize % nouns.len()])
 }
 
+#[derive(Clone, Copy, Debug)]
+struct ScheduledTransmission {
+    eta: u64,
+    msg: udp::RawEncryptedMessage,
+}
+
+const TIMER_WINDOW: usize = 60*6; // one hour?
+
+struct DHT {
+    addresses: HashMap<crypto::PublicKey, SocketAddr>,
+    pubkeys: HashMap<SocketAddr, crypto::PublicKey>,
+    my_key: crypto::KeyPair,
+    timer: [Option<ScheduledTransmission>; TIMER_WINDOW],
+    /// When we send messages, we should store their OnionBoxen in this
+    /// map, so we can listen for the return...
+    onionboxen: HashMap<[u8; 32], onionsalt::OnionBox>,
+}
+
 impl DHT {
     fn new(myself: &crypto::KeyPair) -> Arc<Mutex<DHT>> {
-        let mut dht = DHT {
+        let dht = Arc::new(Mutex::new(DHT {
             addresses: HashMap::new(),
             pubkeys: HashMap::new(),
             onionboxen: HashMap::new(),
             my_key: *myself,
-        };
+            timer: [None; TIMER_WINDOW],
+        }));
         // initialize a the mappings!
-        dht.accept_single_gift(&bingley());
-        Arc::new(Mutex::new(dht))
+        dht.lock().unwrap().accept_single_gift(&bingley());
+        dht
     }
     fn construct_gift(&mut self) -> [RoutingGift; NUM_IN_RESPONSE] {
         let mut out = [bingley(); NUM_IN_RESPONSE];
@@ -451,10 +409,16 @@ impl DHT {
         RoutingGift { key: k, addr: self.addresses[&k] }
     }
     fn random_usize(&mut self) -> usize {
+        self.random_u32() as usize
+    }
+    fn random_u64(&mut self) -> u64 {
+        self.random_u32() as u64
+    }
+    fn random_u32(&mut self) -> u32 {
         // The following is a really stupid way of getting a random
         // usize so that we will send to a random node each time.
         let r = crypto::random_nonce().unwrap().0;
-        r[0] as usize + ((r[1] as usize)<<8) + ((r[2] as usize)<<16)
+        r[0] as u32 + ((r[1] as u32)<<8) + ((r[2] as u32)<<16)
     }
     fn pick_route(&mut self) -> Vec<RoutingGift> {
         let mut out = Vec::new();
@@ -476,6 +440,46 @@ impl DHT {
             old_gift = new_gift;
         }
         out
+    }
+    fn schedule_if_convenient(&mut self, eta: u32, msg: &udp::RawEncryptedMessage) {
+        self.schedule_internal(eta, msg, 1); // this number is an arbitrary sloppiness
+    }
+    fn schedule(&mut self, eta: u32, msg: &udp::RawEncryptedMessage) {
+        self.schedule_internal(eta, msg, TIMER_WINDOW as u64);
+    }
+    fn schedule_internal(&mut self, eta: u32, msg: &udp::RawEncryptedMessage, steadfastness: u64) {
+        let eta = eta as u64 * 1000; // convert to ms!
+        let n = udp::now_ms();
+        let mut idx = (n+1)/udp::SEND_PERIOD_MS + 1;
+        if eta > n {
+            idx += self.random_u64() % ((eta-n)/udp::SEND_PERIOD_MS);
+        }
+        for offset in 0..steadfastness {
+            if self.timer[(idx + offset) as usize % TIMER_WINDOW].is_none() {
+                idx += offset;
+                self.timer[idx as usize % TIMER_WINDOW] =
+                    Some(ScheduledTransmission { eta: eta,
+                                                 msg: *msg});
+                return;
+            }
+        }
+        println!("Dropping response to {}", msg.ip);
+    }
+    fn msg(&mut self, idx: usize) -> udp::RawEncryptedMessage {
+        match self.timer[idx % TIMER_WINDOW] {
+            Some(sch) => sch.msg,
+            None => {
+                let (addr,ob) = self.maintenance();
+                let msg = udp::RawEncryptedMessage{
+                    ip: addr,
+                    data: ob.packet(),
+                };
+                // The following enables us to easily check for a response
+                // to this message.
+                self.onionboxen.insert(ob.return_magic(), ob);
+                msg
+            }
+        }
     }
     fn greet(&mut self) -> (SocketAddr, onionsalt::OnionBox) {
         let mut payload = [0; PAYLOAD_LENGTH];
@@ -559,7 +563,7 @@ pub fn start_static_node() -> Result<(), Error> {
 
     let dht = DHT::new(&my_key);
 
-    let (lopriority, send, get, _) = try!(udp::listen());
+    let (send, get) = try!(udp::listen());
 
     {
         // Here we set up the thread that sends out requests for
@@ -570,16 +574,18 @@ pub fn start_static_node() -> Result<(), Error> {
         let dht = dht.clone(); // a separate copy for sending
                                // maintenance requests.
         std::thread::spawn(move|| {
+            let ms_period = udp::SEND_PERIOD_MS;
+            let buffer_ms = 100; // 100 ms seems enough...
+            let mut next_time = udp::now_ms()/ms_period*ms_period - buffer_ms;
             loop {
-                let (addr,ob) = dht.lock().unwrap().maintenance();
-                let msg = udp::RawEncryptedMessage{
-                    ip: addr,
-                    data: ob.packet(),
-                };
-                // The following enables us to easily check for a response
-                // to this message.
-                dht.lock().unwrap().onionboxen.insert(ob.return_magic(), ob);
-                lopriority.send(msg).unwrap();
+                let idx = (next_time/ms_period) as usize;
+                if !udp::sleep_until(next_time) {
+                    // We are behind, so try to catch up by sleeping extra
+                    // long this time.
+                    next_time += ms_period;
+                }
+                next_time += ms_period;
+                send.send(dht.lock().unwrap().msg(idx)).unwrap();
             }
         });
     }
@@ -604,10 +610,11 @@ pub fn start_static_node() -> Result<(), Error> {
                                 dht.lock().unwrap().accept_single_gift(&gift[0]);
                                 Message::Response(gift).bytes(&mut you_are);
                                 oob.respond(&my_key, &you_are);
-                                send_delayed(&send, routing.eta, &udp::RawEncryptedMessage{
-                                    ip: packet.ip,
-                                    data: oob.packet(),
-                                });
+                                dht.lock().unwrap().schedule_if_convenient(routing.eta,
+                                                                           &udp::RawEncryptedMessage{
+                                                                               ip: packet.ip,
+                                                                               data: oob.packet(),
+                                                                           });
                             } else {
                                 match Message::from_bytes(&payload) {
                                     Message::Greetings(gs) => {
@@ -618,8 +625,9 @@ pub fn start_static_node() -> Result<(), Error> {
                                         let gift = dht.lock().unwrap().construct_gift();
                                         Message::Response(gift).bytes(&mut response);
                                         oob.respond(&my_key, &response);
-                                        send_delayed(&send, routing.eta, &udp::RawEncryptedMessage{
-                                            ip: routing.ip,
+                                        dht.lock().unwrap().schedule(routing.eta,
+                                                                     &udp::RawEncryptedMessage{
+                                            ip: packet.ip,
                                             data: oob.packet(),
                                         });
                                     },
@@ -634,8 +642,8 @@ pub fn start_static_node() -> Result<(), Error> {
                     // This is a packet that we should relay along.
                     println!("I am relaying packet {} -> {}",
                              packet.ip, routing.ip);
-                    send_delayed(&send, routing.eta, &udp::RawEncryptedMessage{
-                        ip: routing.ip,
+                    dht.lock().unwrap().schedule(routing.eta, &udp::RawEncryptedMessage{
+                        ip: packet.ip,
                         data: oob.packet(),
                     });
                 }
@@ -685,22 +693,4 @@ pub fn start_static_node() -> Result<(), Error> {
     }
     // lopriority.send();
     Ok(())
-}
-
-fn send_delayed(send: &Sender<udp::RawEncryptedMessage>,
-                eta: u32, msg: &udp::RawEncryptedMessage) {
-    let n = now();
-    let delay = if eta < n { 0 } else { eta - n };
-    if delay == 0 {
-        println!("Send is late by {} seconds!", n - eta);
-        send.send(*msg).unwrap();
-    } else {
-        println!("Delaying send by {} seconds", delay);
-        let msg = *msg;
-        let send = send.clone();
-        thread::spawn(move|| {
-            thread::sleep_ms(delay*1000);
-            send.send(msg).unwrap();
-        });
-    }
 }

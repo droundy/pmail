@@ -1,5 +1,6 @@
 #![deny(warnings)]
 
+extern crate time;
 extern crate onionsalt;
 
 use std::fmt::{Formatter, Debug};
@@ -11,13 +12,15 @@ use std::net::SocketAddr;
 // use onionsalt::crypto;
 // use onionsalt::crypto::{ToPublicKey};
 use std::io::Error;
-use std::sync::mpsc::{Sender, Receiver, channel,
+use std::sync::mpsc::{Receiver, channel,
                       SyncSender, sync_channel};
 use std::thread;
 
 pub use onionsalt::{PACKET_LENGTH};
 
 pub const PORT: u16 = 54321;
+
+pub const SEND_PERIOD_MS: u64 = 10*1000; // in ms!
 
 #[derive(Copy)]
 pub struct RawEncryptedMessage {
@@ -46,9 +49,7 @@ impl Debug for RawEncryptedMessage {
 }
 
 pub fn listen() -> Result<(SyncSender<RawEncryptedMessage>,
-                           Sender<RawEncryptedMessage>,
-                           Receiver<RawEncryptedMessage>,
-                           SocketAddr), Error> {
+                           Receiver<RawEncryptedMessage>), Error> {
     // Create the socket we will use for all communications.  If we
     // can bind to ipv6, we will only use ipv6 for listening. I'm not
     // sure if this is wise, but it seems best not to listen on both
@@ -68,16 +69,12 @@ pub fn listen() -> Result<(SyncSender<RawEncryptedMessage>,
         }
     };
     let send_socket = try!(socket.try_clone());
-    let myaddr = try!(socket.local_addr());
 
     // Create two channels, one for sending messages from the socket,
     // and one for receiving them.
 
-    let (ts, rs) : (Sender<RawEncryptedMessage>,
-                    Receiver<RawEncryptedMessage>) = channel(); // for sending messages
-    let (low_priority_ts, low_priority_rs)
-        : (SyncSender<RawEncryptedMessage>,
-           Receiver<RawEncryptedMessage>) = sync_channel(0); // for sending low-priority messages
+    let (ts, rs) : (SyncSender<RawEncryptedMessage>,
+                    Receiver<RawEncryptedMessage>) = sync_channel(0); // for sending messages
     let (tr, rr) = channel(); // for receiving messages
 
     // We use four (or more) separate threads for our communication.
@@ -112,23 +109,17 @@ pub fn listen() -> Result<(SyncSender<RawEncryptedMessage>,
     // prior to decrypting or reading any "secret" output.
 
     thread::spawn(move|| {
-        // This is the sender of messages.  I assume that 100 ms is
-        // sufficient time to receive a message from a Receiver, so
-        // that observers cannot tell whether the message was a high-
-        // or low-priority message from watching us.  I also assume
-        // that there will always be a low-priority message available.
-        // That is a responsibility of the dht module.
-        let (send_now, send_warning) = double_timer(10000, 100);
-        for _ in send_warning.iter() {
-            let m: RawEncryptedMessage = if let Ok(message) = rs.try_recv() {
-                message
-            } else {
-                match low_priority_rs.recv() {
-                    Ok(mess) => mess,
-                    _ => unreachable!(),
-                }
-            };
-            send_now.recv().unwrap();
+        // This is the sender of messages.
+        let ms_period = SEND_PERIOD_MS;
+        let mut next_time = (now_ms()/ms_period)*ms_period;
+        loop {
+            if !sleep_until(next_time) {
+                // We are behind, so try to catch up by sleeping extra
+                // long this time.
+                next_time += ms_period;
+            }
+            next_time += ms_period;
+            let m = rs.recv().unwrap();
             // println!("Sending to {}", m.ip);
             match send_socket.send_to(&m.data, &m.ip) {
                 Ok(sent) => {
@@ -165,7 +156,7 @@ pub fn listen() -> Result<(SyncSender<RawEncryptedMessage>,
             }
         }
     });
-    Ok((low_priority_ts, ts, rr, myaddr))
+    Ok((ts, rr))
 }
 
 #[cfg(test)]
@@ -176,10 +167,10 @@ mod tests {
 
     #[test]
     fn listen_works() {
-        let (lopri_send, send, receive, myself) = listen().unwrap();
+        let (send, receive) = listen().unwrap();
         std::thread::spawn(move || {
             let lopri_msg = [2; PACKET_LENGTH];
-            lopri_send.send(udp::RawEncryptedMessage{ip: myself, data: lopri_msg}).unwrap();
+            send.send(udp::RawEncryptedMessage{ip: myself, data: lopri_msg}).unwrap();
         });
         let msg = [1; PACKET_LENGTH];
         send.send(RawEncryptedMessage{ip: myself, data: msg}).unwrap();
@@ -190,26 +181,30 @@ mod tests {
     }
 }
 
-fn double_timer(ms: u32, ms_warning: u32) -> (Receiver<()>, Receiver<()>) {
-    assert!(ms > ms_warning);
-    let (tx, rx) = std::sync::mpsc::sync_channel(0);
-    let (tx_warning, rx_warning) = std::sync::mpsc::sync_channel(0);
-    std::thread::spawn(move || {
-        loop {
-            std::thread::sleep_ms(ms - ms_warning);
-            if tx_warning.send(()).is_err() {
-                break;
-            }
-            // FIXME this sleep really ought to keep track of the
-            // target time, and sleep the correct amount of time, such
-            // that we don't give away the time spent doing the
-            // previous check, which could be affected by CPU
-            // contention.
-            std::thread::sleep_ms(ms_warning);
-            if tx.send(()).is_err() {
-                break;
-            }
-        }
-    });
-    (rx, rx_warning)
+/// The `EPOCH` is when time begins.  We have not facilities for
+/// sending messages prior to this time.  However, we also do not
+/// promise never to change `EPOCH`.  It may be changed in a future
+/// version of the protocol in order to avoid a Y2K-like problem.
+/// Therefore, `EPOCH`-difference times should not be stored on disk,
+/// and should only be sent over the network.  It is also possible
+/// that future changes will needlessly change `EPOCH` (but only while
+/// making other network protool changes) simply to flush out
+/// buggy use of thereof.
+pub const EPOCH: time::Timespec = time::Timespec { sec: 1420092000, nsec: 0 };
+
+pub fn now_ms() -> u64 {
+    let now = time::get_time();
+    let mut ms = (now.sec - EPOCH.sec) as u64 * 1000;
+    ms += (now.nsec/1000000) as u64;
+    ms
+}
+
+pub fn sleep_until(ms_from_epoch: u64) -> bool {
+    let ms = now_ms();
+    if ms > ms_from_epoch {
+        println!("I am behind by {} seconds", (ms - ms_from_epoch) as f64 / 1000.0);
+        return false;
+    }
+    std::thread::sleep_ms((ms_from_epoch - ms) as u32);
+    true
 }
