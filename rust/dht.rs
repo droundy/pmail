@@ -397,7 +397,7 @@ impl DHT {
     fn construct_gift(&mut self) -> [RoutingGift; NUM_IN_RESPONSE] {
         let mut out = [bingley(); NUM_IN_RESPONSE];
         for i in 0..NUM_IN_RESPONSE {
-            out[i] = self.random_gift();
+            out[i] = self.random_live_gift();
         }
         out
     }
@@ -406,6 +406,7 @@ impl DHT {
             self.addresses.insert(g.key, g.addr);
             self.pubkeys.insert(g.addr, g.key);
             self.newbies.insert(g.key);
+            self.print("got gift");
         }
     }
     fn accept_gift(&mut self, gift: &[RoutingGift; NUM_IN_RESPONSE]) {
@@ -418,8 +419,24 @@ impl DHT {
         let mut keys = self.addresses.keys();
         *keys.nth(i).unwrap()
     }
+    fn random_live_key(&mut self) -> crypto::PublicKey {
+        let len = self.liveness.len();
+        if len == 0 {
+            if self.addresses.contains_key(&self.my_key.public) {
+                return self.my_key.public;
+            }
+            return bingley().key;
+        }
+        let i = self.random_usize() % len;
+        let mut keys = self.liveness.keys();
+        *keys.nth(i).unwrap()
+    }
     fn random_gift(&mut self) -> RoutingGift {
         let k = self.random_key();
+        RoutingGift { key: k, addr: self.addresses[&k] }
+    }
+    fn random_live_gift(&mut self) -> RoutingGift {
+        let k = self.random_live_key();
         RoutingGift { key: k, addr: self.addresses[&k] }
     }
     fn random_usize(&mut self) -> usize {
@@ -435,23 +452,18 @@ impl DHT {
         r[0] as u32 + ((r[1] as u32)<<8) + ((r[2] as u32)<<16)
     }
     fn pick_route(&mut self) -> Vec<RoutingGift> {
+        assert!(self.addresses.len() > 1);
         let mut out = Vec::new();
-        let mut old_gift = RoutingGift {
-            key: self.my_key.public,
-            addr: self.addresses[&self.my_key.public],
-        };
         for _ in 0 .. 3 + (self.random_usize() % 4) {
             let mut new_gift = self.random_gift();
-            while new_gift.key == old_gift.key {
+            while new_gift.key == self.my_key.public {
                 new_gift = self.random_gift();
             }
-            if new_gift.key == self.my_key.public {
-                // There is no point creating a loop that passes
-                // *through* myself.
+            if out.contains(&new_gift) {
+                // Let's not create a loop that loops back on itself.
                 return out;
             }
             out.push(new_gift);
-            old_gift = new_gift;
         }
         out
     }
@@ -477,7 +489,6 @@ impl DHT {
                 return;
             }
         }
-        println!("Dropping response to {}", msg.ip);
     }
     fn msg(&mut self, idx: usize) -> udp::RawEncryptedMessage {
         match self.timer[idx % TIMER_WINDOW] {
@@ -488,6 +499,7 @@ impl DHT {
                     ip: addr,
                     data: sm.ob.packet(),
                 };
+                let mut changed_liveness = false;
                 for i in 0 .. ROUTE_COUNT {
                     let k = sm.who_relayed[i];
                     if k != self.my_key.public {
@@ -495,6 +507,7 @@ impl DHT {
                             None => false,
                             Some(liveness) => {
                                 *liveness -= 1;
+                                changed_liveness = true;
                                 *liveness == 0
                             },
                         };
@@ -503,6 +516,9 @@ impl DHT {
                             self.newbies.insert(k);
                         }
                     }
+                }
+                if changed_liveness {
+                    self.print("changed liveness");
                 }
                 // The following enables us to easily check for a response
                 // to this message.
@@ -548,11 +564,10 @@ impl DHT {
 
         let mut ob = onionbox(&keys_and_routes, recipient).unwrap();
         ob.add_payload(self.my_key, &payload);
-        println!("greeting code name: {}\n", codename(&ob.return_magic()));
+        println!("greeting: {}\n", codename(&ob.return_magic()));
         (route[0].addr, SentMsg { ob: ob, who_relayed: who_relayed })
     }
     fn whoami(&mut self, who: &RoutingGift) -> (SocketAddr, SentMsg) {
-        println!("Sending a whoami to {}", who.addr);
         let mut hello_payload = [0; PAYLOAD_LENGTH];
         Message::Greetings([*who; NUM_IN_RESPONSE]).bytes(&mut hello_payload);
 
@@ -564,7 +579,7 @@ impl DHT {
 
         let mut ob = onionbox(&keys_and_routes, 0).unwrap();
         ob.add_payload(self.my_key, &hello_payload);
-        println!("whoami code name: {}\n", codename(&ob.return_magic()));
+        println!("whoami: {} -> {}\n", codename(&ob.return_magic()), who.addr);
         (who.addr, SentMsg { ob: ob, who_relayed: [self.my_key.public; ROUTE_COUNT] })
     }
 
@@ -572,22 +587,24 @@ impl DHT {
         // We almost always send greetings, because they are the least
         // expensive in terms of use of the network, and the most
         // safely ignored by our recipients.
-        if !self.addresses.contains_key(&self.my_key.public) || self.addresses.len() < 2 || self.random_usize() % ROUTE_COUNT != 0 {
-            println!("Routing table:");
-            for (k,a) in self.addresses.iter() {
-                match self.liveness.get(k) {
-                    Some(liveness) => println!(" {} -> {} [{}]", k, a, liveness),
-                    _ => if self.newbies.contains(k) {
-                        println!(" {} -> {} N", k, a);
-                    } else {
-                        println!(" {} -> {}", k, a);
-                    },
-                }
-            }
+        if !self.addresses.contains_key(&self.my_key.public) || self.addresses.len() < 2 || self.random_usize() % (ROUTE_COUNT/3) != 0 {
             let gift = self.random_gift();
             return self.whoami(&gift);
         }
         self.greet()
+    }
+    fn print(&self, note: &str) {
+        println!("Routing table {}:", note);
+        for (k,a) in self.addresses.iter() {
+            match self.liveness.get(k) {
+                Some(liveness) => println!(" {} -> {} [{}]", k, a, liveness),
+                _ => if self.newbies.contains(k) {
+                    println!(" {} -> {} N", k, a);
+                } else {
+                    println!(" {} -> {}", k, a);
+                },
+            }
+        }
     }
 }
 
@@ -640,7 +657,6 @@ pub fn start_static_node() -> Result<(), Error> {
                         },
                         Ok(payload) => {
                             if routing.who_am_i {
-                                println!("Got whoami from {}", packet.ip);
                                 let mut you_are = [0; PAYLOAD_LENGTH];
                                 let mut gift = dht.lock().unwrap().construct_gift();
                                 gift[0] = RoutingGift{ addr: packet.ip,
@@ -692,7 +708,7 @@ pub fn start_static_node() -> Result<(), Error> {
                     Some(sm) =>
                         match sm.ob.read_return(my_key, &packet.data) {
                             Ok(msg) => {
-                                println!("Response to code name {}!",
+                                println!("| {} ====> :)",
                                          codename(array_ref![packet.data,0,32]));
                                 Some((sm.clone(),Message::from_bytes(&msg)))
                             },
@@ -702,7 +718,7 @@ pub fn start_static_node() -> Result<(), Error> {
                             },
                         },
                     None => {
-                        println!("Not sure what that was! (from {})", packet.ip);
+                        // println!("Not sure what that was! (from {})", packet.ip);
                         None
                     },
                 };
@@ -716,17 +732,22 @@ pub fn start_static_node() -> Result<(), Error> {
                     },
                     Some((sm,Message::Response(rgs))) => {
                         dht.lock().unwrap().accept_gift(&rgs);
+                        let mut changed_routing = false;
                         for i in 0 .. ROUTE_COUNT {
                             if sm.who_relayed[i] != my_key.public {
-                                println!("Increasing liveness for {}!", sm.who_relayed[i]);
+                                // println!("Increasing liveness for {}!", sm.who_relayed[i]);
                                 let mut dht = dht.lock().unwrap();
                                 dht.liveness.insert(sm.who_relayed[i],
                                                     MAX_LIVENESS);
                                 dht.newbies.remove(&sm.who_relayed[i]);
+                                changed_routing = true;
                             }
                         }
+                        if changed_routing {
+                            dht.lock().unwrap().print("routing worked");
+                        }
                         if rgs[0].key == my_key.public {
-                            println!("My address is {}", rgs[0].addr);
+                            // println!("My address is {}", rgs[0].addr);
                             let mut dht = dht.lock().unwrap();
                             dht.liveness.insert(my_key.public, MAX_LIVENESS);
                             dht.newbies.remove(&my_key.public);
