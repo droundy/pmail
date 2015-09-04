@@ -10,7 +10,7 @@ use onionsalt::{crypto,
 use std::io::Error;
 use std;
 use super::udp;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::{Arc,Mutex};
 
@@ -358,24 +358,35 @@ struct ScheduledTransmission {
     msg: udp::RawEncryptedMessage,
 }
 
+#[derive(Clone, Debug)]
+struct SentMsg {
+    ob: onionsalt::OnionBox,
+    who_relayed: [crypto::PublicKey; ROUTE_COUNT],
+}
+
 const TIMER_WINDOW: usize = 60*6; // one hour?
+const MAX_LIVENESS: u8 = 2*(ROUTE_COUNT as u8);
 
 struct DHT {
+    newbies: HashSet<crypto::PublicKey>,
     addresses: HashMap<crypto::PublicKey, SocketAddr>,
     pubkeys: HashMap<SocketAddr, crypto::PublicKey>,
+    liveness: HashMap<crypto::PublicKey, u8>,
     my_key: crypto::KeyPair,
     timer: [Option<ScheduledTransmission>; TIMER_WINDOW],
     /// When we send messages, we should store their OnionBoxen in this
     /// map, so we can listen for the return...
-    onionboxen: HashMap<[u8; 32], onionsalt::OnionBox>,
+    onionboxen: HashMap<[u8; 32], SentMsg>,
 }
 
 impl DHT {
     fn new(myself: &crypto::KeyPair) -> Arc<Mutex<DHT>> {
         let dht = Arc::new(Mutex::new(DHT {
+            newbies: HashSet::new(),
             addresses: HashMap::new(),
             pubkeys: HashMap::new(),
             onionboxen: HashMap::new(),
+            liveness: HashMap::new(),
             my_key: *myself,
             timer: [None; TIMER_WINDOW],
         }));
@@ -391,8 +402,11 @@ impl DHT {
         out
     }
     fn accept_single_gift(&mut self, g: &RoutingGift) {
-        self.addresses.insert(g.key, g.addr);
-        self.pubkeys.insert(g.addr, g.key);
+        if !self.addresses.contains_key(&g.key) {
+            self.addresses.insert(g.key, g.addr);
+            self.pubkeys.insert(g.addr, g.key);
+            self.newbies.insert(g.key);
+        }
     }
     fn accept_gift(&mut self, gift: &[RoutingGift; NUM_IN_RESPONSE]) {
         for g in gift {
@@ -451,7 +465,7 @@ impl DHT {
         let eta = eta as u64 * 1000; // convert to ms!
         let n = udp::now_ms();
         let mut idx = (n+1)/udp::SEND_PERIOD_MS + 1;
-        if eta > n {
+        if (eta-n)/udp::SEND_PERIOD_MS > 0 {
             idx += self.random_u64() % ((eta-n)/udp::SEND_PERIOD_MS);
         }
         for offset in 0..steadfastness {
@@ -469,19 +483,35 @@ impl DHT {
         match self.timer[idx % TIMER_WINDOW] {
             Some(sch) => sch.msg,
             None => {
-                let (addr,ob) = self.maintenance();
-                let msg = udp::RawEncryptedMessage{
+                let (addr,sm) = self.maintenance();
+                let msg = udp::RawEncryptedMessage {
                     ip: addr,
-                    data: ob.packet(),
+                    data: sm.ob.packet(),
                 };
+                for i in 0 .. ROUTE_COUNT {
+                    let k = sm.who_relayed[i];
+                    if k != self.my_key.public {
+                        let deleteme = match self.liveness.get_mut(&k) {
+                            None => false,
+                            Some(liveness) => {
+                                *liveness -= 1;
+                                *liveness == 0
+                            },
+                        };
+                        if deleteme {
+                            self.liveness.remove(&k);
+                            self.newbies.insert(k);
+                        }
+                    }
+                }
                 // The following enables us to easily check for a response
                 // to this message.
-                self.onionboxen.insert(ob.return_magic(), ob);
+                self.onionboxen.insert(sm.ob.return_magic(), sm);
                 msg
             }
         }
     }
-    fn greet(&mut self) -> (SocketAddr, onionsalt::OnionBox) {
+    fn greet(&mut self) -> (SocketAddr, SentMsg) {
         let mut payload = [0; PAYLOAD_LENGTH];
         Message::Greetings(self.construct_gift()).bytes(&mut payload);
 
@@ -494,7 +524,9 @@ impl DHT {
         println!("\nSending a nice greeting loop of length {}", route.len());
         let mut keys_and_routes = Vec::new();
         let mut delay_time = 0;
+        let mut who_relayed = [self.my_key.public; ROUTE_COUNT];
         for i in 0 .. route.len() {
+            who_relayed[i] = route[i].key;
             let mut k_and_r = (route[i].key, [0; ROUTING_LENGTH]);
             let next_addr = if i < route.len()-1 {
                 route[i+1].addr
@@ -517,9 +549,9 @@ impl DHT {
         let mut ob = onionbox(&keys_and_routes, recipient).unwrap();
         ob.add_payload(self.my_key, &payload);
         println!("greeting code name: {}\n", codename(&ob.return_magic()));
-        (route[0].addr, ob)
+        (route[0].addr, SentMsg { ob: ob, who_relayed: who_relayed })
     }
-    fn whoami(&mut self, who: &RoutingGift) -> (SocketAddr, onionsalt::OnionBox) {
+    fn whoami(&mut self, who: &RoutingGift) -> (SocketAddr, SentMsg) {
         println!("Sending a whoami to {}", who.addr);
         let mut hello_payload = [0; PAYLOAD_LENGTH];
         Message::Greetings([*who; NUM_IN_RESPONSE]).bytes(&mut hello_payload);
@@ -533,17 +565,24 @@ impl DHT {
         let mut ob = onionbox(&keys_and_routes, 0).unwrap();
         ob.add_payload(self.my_key, &hello_payload);
         println!("whoami code name: {}\n", codename(&ob.return_magic()));
-        (who.addr, ob)
+        (who.addr, SentMsg { ob: ob, who_relayed: [self.my_key.public; ROUTE_COUNT] })
     }
 
-    fn maintenance(&mut self) -> (SocketAddr, onionsalt::OnionBox) {
+    fn maintenance(&mut self) -> (SocketAddr, SentMsg) {
         // We almost always send greetings, because they are the least
         // expensive in terms of use of the network, and the most
         // safely ignored by our recipients.
         if !self.addresses.contains_key(&self.my_key.public) || self.addresses.len() < 2 || self.random_usize() % ROUTE_COUNT != 0 {
             println!("Routing table:");
             for (k,a) in self.addresses.iter() {
-                println!(" {} -> {}", k, a);
+                match self.liveness.get(k) {
+                    Some(liveness) => println!(" {} -> {} [{}]", k, a, liveness),
+                    _ => if self.newbies.contains(k) {
+                        println!(" {} -> {} N", k, a);
+                    } else {
+                        println!(" {} -> {}", k, a);
+                    },
+                }
             }
             let gift = self.random_gift();
             return self.whoami(&gift);
@@ -650,12 +689,12 @@ pub fn start_static_node() -> Result<(), Error> {
             },
             _ => {
                 let maybe_msg = match dht.lock().unwrap().onionboxen.get(array_ref![packet.data,0,32]) {
-                    Some(ob) =>
-                        match ob.read_return(my_key, &packet.data) {
+                    Some(sm) =>
+                        match sm.ob.read_return(my_key, &packet.data) {
                             Ok(msg) => {
                                 println!("Response to code name {}!",
                                          codename(array_ref![packet.data,0,32]));
-                                Some(msg)
+                                Some((sm.clone(),Message::from_bytes(&msg)))
                             },
                             _ => {
                                 println!("Message illegible!");
@@ -667,26 +706,38 @@ pub fn start_static_node() -> Result<(), Error> {
                         None
                     },
                 };
-                match maybe_msg.map(|x| { Message::from_bytes(&x) }) {
-                    None => (),
-                    Some(Message::Greetings(_)) => {
-                        println!("Greetings not a valid response");
-                    },
-                    Some(Message::Response(rgs)) => {
-                        dht.lock().unwrap().accept_gift(&rgs);
-                        if rgs[0].key == my_key.public {
-                            println!("My address is {}", rgs[0].addr);
-                        }
-                    },
-                    Some(Message::PickUp {..}) => {
-                        println!("Pickup not yet handled");
-                    },
-                    Some(Message::ForwardPlease {..}) => {
-                        println!("Forward not yet handled");
-                    },
-                }
                 if maybe_msg.is_some() {
                     dht.lock().unwrap().onionboxen.remove(array_ref![packet.data,0,32]);
+                }
+                match maybe_msg {
+                    None => (),
+                    Some((_,Message::Greetings(_))) => {
+                        println!("Greetings not a valid response");
+                    },
+                    Some((sm,Message::Response(rgs))) => {
+                        dht.lock().unwrap().accept_gift(&rgs);
+                        for i in 0 .. ROUTE_COUNT {
+                            if sm.who_relayed[i] != my_key.public {
+                                println!("Increasing liveness for {}!", sm.who_relayed[i]);
+                                let mut dht = dht.lock().unwrap();
+                                dht.liveness.insert(sm.who_relayed[i],
+                                                    MAX_LIVENESS);
+                                dht.newbies.remove(&sm.who_relayed[i]);
+                            }
+                        }
+                        if rgs[0].key == my_key.public {
+                            println!("My address is {}", rgs[0].addr);
+                            let mut dht = dht.lock().unwrap();
+                            dht.liveness.insert(my_key.public, MAX_LIVENESS);
+                            dht.newbies.remove(&my_key.public);
+                        }
+                    },
+                    Some((_,Message::PickUp {..})) => {
+                        println!("Pickup not yet handled");
+                    },
+                    Some((_,Message::ForwardPlease {..})) => {
+                        println!("Forward not yet handled");
+                    },
                 }
             },
         }

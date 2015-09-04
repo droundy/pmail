@@ -8,7 +8,7 @@ use std::fmt;
 use std;
 
 use std::net::UdpSocket;
-use std::net::SocketAddr;
+use std::net::{ SocketAddr, SocketAddrV4 };
 // use onionsalt::crypto;
 // use onionsalt::crypto::{ToPublicKey};
 use std::io::Error;
@@ -30,7 +30,7 @@ pub struct RawEncryptedMessage {
 
 impl Clone for RawEncryptedMessage {
     fn clone(&self) -> RawEncryptedMessage {
-        RawEncryptedMessage { ip: self.ip, data: self.data }
+        RawEncryptedMessage { ip: normalize(self.ip), data: self.data }
     }
 }
 
@@ -145,7 +145,7 @@ pub fn listen() -> Result<(SyncSender<RawEncryptedMessage>,
             let (amt, src) = socket.recv_from(&mut buf).unwrap();
             if amt == PACKET_LENGTH {
                 // println!("I got a packet from {}", src);
-                if let Err(e) = tr.send(RawEncryptedMessage{ ip: src, data: buf }) {
+                if let Err(e) = tr.send(RawEncryptedMessage{ ip: normalize(src), data: buf }) {
                     // When no one is listending for messages, we may
                     // as well shut down our listener.
                     println!("Quitting now because {:?}", e);
@@ -207,4 +207,16 @@ pub fn sleep_until(ms_from_epoch: u64) -> bool {
     }
     std::thread::sleep_ms((ms_from_epoch - ms) as u32);
     true
+}
+
+fn normalize(sa: SocketAddr) -> SocketAddr {
+    // is it an IPv4-mapped IPv6 address?
+    match sa {
+        SocketAddr::V6(sa6) =>
+            match sa6.ip().to_ipv4() {
+                None => sa,
+                Some(ipv4) => SocketAddr::V4(SocketAddrV4::new(ipv4, sa6.port())),
+            },
+        _ => sa,
+    }
 }
