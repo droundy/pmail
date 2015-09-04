@@ -3,7 +3,8 @@ extern crate time;
 use std::net::{SocketAddr, SocketAddrV6, SocketAddrV4,
                Ipv6Addr, Ipv4Addr};
 use onionsalt;
-use onionsalt::{ROUTING_LENGTH,
+use onionsalt::{ROUTE_COUNT,
+                ROUTING_LENGTH,
                 PAYLOAD_LENGTH};
 use onionsalt::{crypto,
                 onionbox,
@@ -385,8 +386,6 @@ fn bingley() -> RoutingGift {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct DHT {
-    // has_been_seen: HashMap<crypto::PublicKey, u32>,
-    // never_seen: HashSet<crypto::PublicKey>,
     addresses: HashMap<crypto::PublicKey, SocketAddr>,
     pubkeys: HashMap<SocketAddr, crypto::PublicKey>,
     my_key: crypto::KeyPair,
@@ -534,7 +533,10 @@ impl DHT {
     }
 
     fn maintenance(&mut self) -> (SocketAddr, onionsalt::OnionBox) {
-        if !self.addresses.contains_key(&self.my_key.public) || self.addresses.len() < 2 || self.random_usize() % 10 == 0 {
+        // We almost always send greetings, because they are the least
+        // expensive in terms of use of the network, and the most
+        // safely ignored by our recipients.
+        if !self.addresses.contains_key(&self.my_key.public) || self.addresses.len() < 2 || self.random_usize() % ROUTE_COUNT != 0 {
             println!("Routing table:");
             for (k,a) in self.addresses.iter() {
                 println!(" {} -> {}", k, a);
