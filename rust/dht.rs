@@ -385,10 +385,11 @@ struct DHT {
     /// When we send messages, we should store their OnionBoxen in this
     /// map, so we can listen for the return...
     onionboxen: HashMap<[u8; 32], SentMsg>,
+    send_period_ms: u64,
 }
 
 impl DHT {
-    fn new(myself: &crypto::KeyPair) -> Arc<Mutex<DHT>> {
+    fn new(myself: &crypto::KeyPair, send_period_ms: u64,) -> Arc<Mutex<DHT>> {
         let dht = Arc::new(Mutex::new(DHT {
             newbies: HashSet::new(),
             addresses: HashMap::new(),
@@ -397,6 +398,7 @@ impl DHT {
             liveness: HashMap::new(),
             my_key: *myself,
             timer: [None; TIMER_WINDOW],
+            send_period_ms: send_period_ms,
         }));
         // initialize a the mappings!
         dht.lock().unwrap().accept_single_gift(&bingley());
@@ -461,16 +463,16 @@ impl DHT {
         r[0] as u32 + ((r[1] as u32)<<8) + ((r[2] as u32)<<16)
     }
     fn pick_route(&mut self) -> Vec<RoutingGift> {
-        assert!(self.addresses.len() > 1);
+        assert!(self.addresses.len() > 2);
         let mut out = Vec::new();
         for _ in 0 .. 3 + (self.random_usize() % 4) {
             let mut new_gift = self.random_gift();
-            while new_gift.key == self.my_key.public {
-                new_gift = self.random_gift();
-            }
-            if out.contains(&new_gift) {
+            if out.len() > 1 && out.contains(&new_gift) {
                 // Let's not create a loop that loops back on itself.
                 return out;
+            }
+            while new_gift.key == self.my_key.public || out.contains(&new_gift) {
+                new_gift = self.random_gift();
             }
             out.push(new_gift);
         }
@@ -485,9 +487,9 @@ impl DHT {
     fn schedule_internal(&mut self, eta: u32, msg: &udp::RawEncryptedMessage, steadfastness: u64) {
         let eta = eta as u64 * 1000; // convert to ms!
         let n = udp::now_ms();
-        let mut idx = (n+1)/udp::SEND_PERIOD_MS + 1;
-        if (eta-n)/udp::SEND_PERIOD_MS > 0 {
-            idx += self.random_u64() % ((eta-n)/udp::SEND_PERIOD_MS);
+        let mut idx = (n+1)/self.send_period_ms + 1;
+        if (eta-n)/self.send_period_ms > 0 {
+            idx += self.random_u64() % ((eta-n)/self.send_period_ms);
         }
         for offset in 0..steadfastness {
             if self.timer[(idx + offset) as usize % TIMER_WINDOW].is_none() {
@@ -596,7 +598,7 @@ impl DHT {
         // We almost always send greetings, because they are the least
         // expensive in terms of use of the network, and the most
         // safely ignored by our recipients.
-        if !self.addresses.contains_key(&self.my_key.public) || self.addresses.len() < 2 || self.random_usize() % (ROUTE_COUNT/3) != 0 {
+        if !self.addresses.contains_key(&self.my_key.public) || self.addresses.len() < 3 || self.random_usize() % (ROUTE_COUNT/3) != 0 {
             let gift = self.random_gift();
             return self.whoami(&gift);
         }
@@ -626,9 +628,10 @@ pub fn start_static_node() -> Result<(), Error> {
     };
     let my_key = read_or_generate_keypair(keydirname).unwrap();
 
-    let dht = DHT::new(&my_key);
+    let send_period_ms = 1000*10;
+    let dht = DHT::new(&my_key, send_period_ms);
 
-    let (send, get) = try!(udp::listen());
+    let (send, get) = try!(udp::listen(send_period_ms));
 
     {
         // Here we set up the thread that sends out requests for
@@ -639,7 +642,7 @@ pub fn start_static_node() -> Result<(), Error> {
         let dht = dht.clone(); // a separate copy for sending
                                // maintenance requests.
         std::thread::spawn(move|| {
-            let ms_period = udp::SEND_PERIOD_MS;
+            let ms_period = send_period_ms;
             let buffer_ms = 100; // 100 ms seems enough...
             let mut next_time = udp::now_ms()/ms_period*ms_period - buffer_ms;
             loop {

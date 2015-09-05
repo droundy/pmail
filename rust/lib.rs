@@ -17,13 +17,22 @@ mod tests {
 
     #[test]
     fn listen_works() {
-        let (lopri_send, send, receive, myself) = udp::listen().unwrap();
+        use std::net::{SocketAddr};
+        use std::str::FromStr;
+        let send_period_ms = 1000*1;
+        let (send, receive) = udp::listen(send_period_ms).unwrap();
         let lopri_msg = [2; PACKET_LENGTH];
-        std::thread::spawn(move || {
-            lopri_send.send(udp::RawEncryptedMessage{ip: myself, data: lopri_msg}).unwrap();
-        });
         let msg = [1; PACKET_LENGTH];
-        send.send(udp::RawEncryptedMessage{ip: myself, data: msg}).unwrap();
+        std::thread::spawn(move || {
+            send.send(udp::RawEncryptedMessage{ip: SocketAddr::from_str("127.0.0.1:54321").unwrap(),
+                                               data: lopri_msg}).unwrap();
+            send.send(udp::RawEncryptedMessage{ip: SocketAddr::from_str("127.0.0.1:54321").unwrap(),
+                                               data: msg}).unwrap();
+        });
+        let got = receive.recv().unwrap();
+        for i in 0..PACKET_LENGTH {
+            assert_eq!(got.data[i], 2);
+        }
         let got = receive.recv().unwrap();
         for i in 0..PACKET_LENGTH {
             assert_eq!(got.data[i], 1);

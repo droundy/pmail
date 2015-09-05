@@ -20,8 +20,6 @@ pub use onionsalt::{PACKET_LENGTH};
 
 pub const PORT: u16 = 54321;
 
-pub const SEND_PERIOD_MS: u64 = 10*1000; // in ms!
-
 #[derive(Copy)]
 pub struct RawEncryptedMessage {
     pub ip: SocketAddr,
@@ -48,8 +46,8 @@ impl Debug for RawEncryptedMessage {
     }
 }
 
-pub fn listen() -> Result<(SyncSender<RawEncryptedMessage>,
-                           Receiver<RawEncryptedMessage>), Error> {
+pub fn listen(send_period_ms: u64) -> Result<(SyncSender<RawEncryptedMessage>,
+                                              Receiver<RawEncryptedMessage>), Error> {
     // Create the socket we will use for all communications.  If we
     // can bind to ipv6, we will only use ipv6 for listening. I'm not
     // sure if this is wise, but it seems best not to listen on both
@@ -110,7 +108,7 @@ pub fn listen() -> Result<(SyncSender<RawEncryptedMessage>,
 
     thread::spawn(move|| {
         // This is the sender of messages.
-        let ms_period = SEND_PERIOD_MS;
+        let ms_period = send_period_ms;
         let mut next_time = (now_ms()/ms_period)*ms_period;
         loop {
             if !sleep_until(next_time) {
@@ -157,28 +155,6 @@ pub fn listen() -> Result<(SyncSender<RawEncryptedMessage>,
         }
     });
     Ok((ts, rr))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std;
-    use udp;
-
-    #[test]
-    fn listen_works() {
-        let (send, receive) = listen().unwrap();
-        std::thread::spawn(move || {
-            let lopri_msg = [2; PACKET_LENGTH];
-            send.send(udp::RawEncryptedMessage{ip: myself, data: lopri_msg}).unwrap();
-        });
-        let msg = [1; PACKET_LENGTH];
-        send.send(RawEncryptedMessage{ip: myself, data: msg}).unwrap();
-        let got = receive.recv().unwrap();
-        for i in 0..PACKET_LENGTH {
-            assert_eq!(got.data[i], 1);
-        }
-    }
 }
 
 /// The `EPOCH` is when time begins.  We have not facilities for
