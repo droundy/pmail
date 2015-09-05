@@ -525,7 +525,10 @@ impl DHT {
     }
     fn msg(&mut self, idx: usize) -> udp::RawEncryptedMessage {
         match self.timer[idx % TIMER_WINDOW] {
-            Some(sch) => sch.msg,
+            Some(sch) => {
+                self.timer[idx % TIMER_WINDOW] = None;
+                sch.msg
+            },
             None => {
                 let (addr,sm) = self.maintenance();
                 let msg = udp::RawEncryptedMessage {
