@@ -343,7 +343,8 @@ fn wentworth() -> RoutingGift {
 
 fn codename(text: &[u8]) -> String {
     let adjectives = ["good", "happy", "nice", "evil", "sloppy", "slovenly",
-                      "powerful", "strong", "flying",
+                      "powerful", "strong", "flying", "mad", "fast",
+                      "indestructable",
                       "meticulous", "beloved", "hateful", "green", "lovely",
                       "corporate", "presidential", "stately", "serene",
                       "indignant", "exciting", "one", "fluffy", "furry",
@@ -353,6 +354,7 @@ fn codename(text: &[u8]) -> String {
                  "physicist", "musicologist", "teacher", "professor",
                  "squirrel", "deer", "beaver", "duck", "poodle", "dog",
                  "republican", "democrat", "elephant", "congressman",
+                 "villain", "archvillain", "enemy", "sidekick",
                  "bunny", "cat", "kitty", "boy", "girl", "man", "woman"];
     if text.len() < 2 {
         return format!("{:?}", text);
