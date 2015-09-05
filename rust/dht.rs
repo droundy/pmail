@@ -661,7 +661,7 @@ pub fn start_static_node() -> Result<(), Error> {
     };
     let my_key = read_or_generate_keypair(keydirname).unwrap();
 
-    let send_period_ms = 1000*2;
+    let send_period_ms = 1000*10;
     let dht = DHT::new(&my_key, send_period_ms);
 
     let (send, get) = try!(udp::listen(send_period_ms));
