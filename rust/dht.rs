@@ -343,15 +343,16 @@ fn wentworth() -> RoutingGift {
 
 fn codename(text: &[u8]) -> String {
     let adjectives = ["good", "happy", "nice", "evil", "sloppy", "slovenly",
+                      "powerful", "strong", "flying",
                       "meticulous", "beloved", "hateful", "green", "lovely",
                       "corporate", "presidential", "stately", "serene",
-                      "indignant", "exciting", "one", "fluffy",
+                      "indignant", "exciting", "one", "fluffy", "furry",
                       "sour", "hot", "sexy", "absent minded", "considerate"];
     let nouns = ["warthog", "vampire", "person", "nemesis", "pooch",
                  "superhero", "scientist", "writer", "author", "oboist",
                  "physicist", "musicologist", "teacher", "professor",
-                 "squirrel", "deer", "beaver", "duck", "poodle",
-                 "republican", "democrat",
+                 "squirrel", "deer", "beaver", "duck", "poodle", "dog",
+                 "republican", "democrat", "elephant", "congressman",
                  "bunny", "cat", "kitty", "boy", "girl", "man", "woman"];
     if text.len() < 2 {
         return format!("{:?}", text);
@@ -388,6 +389,25 @@ struct DHT {
     send_period_ms: u64,
 }
 
+trait WithLock {
+    fn with_lock<F,T>(&self, f: F) -> T where F : Fn(&mut DHT) -> T;
+    fn name_lock<F,T>(&self, n: &str, f: F) -> T where F : Fn(&mut DHT) -> T;
+}
+impl WithLock for Arc<Mutex<DHT>> {
+    fn with_lock<F,T>(&self, f: F) -> T where F : Fn(&mut DHT) -> T {
+        // println!("vvvvvv  locking  vvvvvv");
+        let out = f(&mut self.lock().unwrap());
+        // println!("^^^^^^ releasing ^^^^^^");
+        out
+    }
+    fn name_lock<F,T>(&self, _n: &str, f: F) -> T where F : Fn(&mut DHT) -> T {
+        // println!("vvvvvv {}  locking  vvvvvv", n);
+        let out = f(&mut self.lock().unwrap());
+        // println!("^^^^^^ {} releasing ^^^^^^", n);
+        out
+    }
+}
+
 impl DHT {
     fn new(myself: &crypto::KeyPair, send_period_ms: u64,) -> Arc<Mutex<DHT>> {
         let dht = Arc::new(Mutex::new(DHT {
@@ -401,8 +421,8 @@ impl DHT {
             send_period_ms: send_period_ms,
         }));
         // initialize a the mappings!
-        dht.lock().unwrap().accept_single_gift(&bingley());
-        dht.lock().unwrap().accept_single_gift(&wentworth());
+        dht.with_lock(|dht| { dht.accept_single_gift(&bingley()) });
+        dht.with_lock(|dht| { dht.accept_single_gift(&wentworth()) });
         dht
     }
     fn construct_gift(&mut self) -> [RoutingGift; NUM_IN_RESPONSE] {
@@ -467,7 +487,7 @@ impl DHT {
         let mut out = Vec::new();
         for _ in 0 .. 3 + (self.random_usize() % 4) {
             let mut new_gift = self.random_gift();
-            if out.len() > 1 && out.contains(&new_gift) {
+            if out.len() > 1 && (out.contains(&new_gift) || new_gift.key == self.my_key.public) {
                 // Let's not create a loop that loops back on itself.
                 return out;
             }
@@ -488,7 +508,7 @@ impl DHT {
         let eta = eta as u64 * 1000; // convert to ms!
         let n = udp::now_ms();
         let mut idx = (n+1)/self.send_period_ms + 1;
-        if (eta-n)/self.send_period_ms > 0 {
+        if (eta as i64 - n as i64)/self.send_period_ms as i64 > 0 {
             idx += self.random_u64() % ((eta-n)/self.send_period_ms);
         }
         for offset in 0..steadfastness {
@@ -565,7 +585,8 @@ impl DHT {
             } else {
                 println!("    {}", route[i].addr);
             }
-            delay_time += 10 + self.random_usize() as u32 % 60;
+            let delay_ms = self.send_period_ms + self.random_u64() % (6*self.send_period_ms);
+            delay_time += ((delay_ms+999)/1000) as u32;
             let mut ri = RoutingInfo::new(next_addr, delay_time);
             ri.is_for_me = i == recipient;
             ri.who_am_i = false;
@@ -575,6 +596,8 @@ impl DHT {
 
         let mut ob = onionbox(&keys_and_routes, recipient).unwrap();
         ob.add_payload(self.my_key, &payload);
+        println!("greeting: {} -> ... -> {}\n",
+                 codename(&ob.packet()), codename(&ob.return_magic()));
         println!("greeting: {}\n", codename(&ob.return_magic()));
         (route[0].addr, SentMsg { ob: ob, who_relayed: who_relayed })
     }
@@ -583,14 +606,19 @@ impl DHT {
         Message::Greetings([*who; NUM_IN_RESPONSE]).bytes(&mut hello_payload);
 
         let mut keys_and_routes = [(who.key, [0; ROUTING_LENGTH])];
-        let mut ri = RoutingInfo::new(who.addr, 60);
+        // Always ask for essentially no delay in responding to
+        // whoami.  This prevents whoami responses from being
+        // scheduled in the future, which relies on whoami responses
+        // being dropped rather than delayed.
+        let mut ri = RoutingInfo::new(who.addr, 1);
         ri.is_for_me = true;
         ri.who_am_i = true;
         ri.bytes(&mut keys_and_routes[0].1);
 
         let mut ob = onionbox(&keys_and_routes, 0).unwrap();
         ob.add_payload(self.my_key, &hello_payload);
-        println!("whoami: {} -> {}\n", codename(&ob.return_magic()), who.addr);
+        println!("whoami: {} -> {} -> {}\n",
+                 codename(&ob.packet()), who.addr, codename(&ob.return_magic()));
         (who.addr, SentMsg { ob: ob, who_relayed: [self.my_key.public; ROUTE_COUNT] })
     }
 
@@ -598,7 +626,7 @@ impl DHT {
         // We almost always send greetings, because they are the least
         // expensive in terms of use of the network, and the most
         // safely ignored by our recipients.
-        if !self.addresses.contains_key(&self.my_key.public) || self.addresses.len() < 3 || self.random_usize() % (ROUTE_COUNT/3) != 0 {
+        if !self.addresses.contains_key(&self.my_key.public) || self.addresses.len() < 3 || self.random_usize() % ROUTE_COUNT != 0 {
             let gift = self.random_gift();
             return self.whoami(&gift);
         }
@@ -628,7 +656,7 @@ pub fn start_static_node() -> Result<(), Error> {
     };
     let my_key = read_or_generate_keypair(keydirname).unwrap();
 
-    let send_period_ms = 1000*10;
+    let send_period_ms = 1000*2;
     let dht = DHT::new(&my_key, send_period_ms);
 
     let (send, get) = try!(udp::listen(send_period_ms));
@@ -653,7 +681,7 @@ pub fn start_static_node() -> Result<(), Error> {
                     next_time += ms_period;
                 }
                 next_time += ms_period;
-                send.send(dht.lock().unwrap().msg(idx)).unwrap();
+                send.send(dht.name_lock("send", |dht| {dht.msg(idx)})).unwrap();
             }
         });
     }
@@ -670,33 +698,36 @@ pub fn start_static_node() -> Result<(), Error> {
                         Ok(payload) => {
                             if routing.who_am_i {
                                 let mut you_are = [0; PAYLOAD_LENGTH];
-                                let mut gift = dht.lock().unwrap().construct_gift();
+                                let mut gift = dht.name_lock("gift", |dht|{dht.construct_gift()});
                                 gift[0] = RoutingGift{ addr: packet.ip,
                                                        key: oob.key() };
                                 // add the sender to our database of routers
-                                dht.lock().unwrap().accept_single_gift(&gift[0]);
+                                dht.name_lock("accept", |dht|{dht.accept_single_gift(&gift[0])});
                                 Message::Response(gift).bytes(&mut you_are);
                                 oob.respond(&my_key, &you_are);
-                                dht.lock().unwrap().schedule_if_convenient(routing.eta,
-                                                                           &udp::RawEncryptedMessage{
-                                                                               ip: packet.ip,
-                                                                               data: oob.packet(),
-                                                                           });
+                                dht.name_lock("schedule",
+                                              |dht|{dht.schedule_if_convenient(routing.eta,
+                                                                               &udp::RawEncryptedMessage{
+                                                                                   ip: packet.ip,
+                                                                                   data: oob.packet(),
+                                                                               })});
                             } else {
                                 match Message::from_bytes(&payload) {
                                     Message::Greetings(gs) => {
-                                        dht.lock().unwrap().accept_gift(&gs);
-                                        println!("Got greeting from {}", packet.ip);
+                                        dht.with_lock(|dht|{dht.accept_gift(&gs)});
 
                                         let mut response = [0; PAYLOAD_LENGTH];
-                                        let gift = dht.lock().unwrap().construct_gift();
+                                        let gift = dht.with_lock(|dht|{dht.construct_gift()});
                                         Message::Response(gift).bytes(&mut response);
                                         oob.respond(&my_key, &response);
-                                        dht.lock().unwrap().schedule(routing.eta,
-                                                                     &udp::RawEncryptedMessage{
-                                            ip: packet.ip,
-                                            data: oob.packet(),
-                                        });
+                                        println!("Responding {} {} -> {} {}",
+                                                 codename(&packet.data), packet.ip,
+                                                 codename(&oob.packet()), routing.ip);
+                                        dht.with_lock(|dht|{dht.schedule(routing.eta,
+                                                                         &udp::RawEncryptedMessage{
+                                                                             ip: routing.ip,
+                                                                             data: oob.packet(),
+                                                                         })});
                                     },
                                     _ => {
                                         println!("Something else for me!\n\n");
@@ -707,12 +738,13 @@ pub fn start_static_node() -> Result<(), Error> {
                     }
                 } else {
                     // This is a packet that we should relay along.
-                    println!("I am relaying packet {} -> {}",
-                             packet.ip, routing.ip);
-                    dht.lock().unwrap().schedule(routing.eta, &udp::RawEncryptedMessage{
-                        ip: packet.ip,
+                    println!("Relaying {} {} -> {} {}",
+                             codename(&packet.data), packet.ip,
+                             codename(&oob.packet()), routing.ip);
+                    dht.with_lock(|dht|{dht.schedule(routing.eta, &udp::RawEncryptedMessage{
+                        ip: routing.ip,
                         data: oob.packet(),
-                    });
+                    })});
                 }
             },
             _ => {
@@ -721,7 +753,7 @@ pub fn start_static_node() -> Result<(), Error> {
                         match sm.ob.read_return(my_key, &packet.data) {
                             Ok(msg) => {
                                 println!("| {} ====> :)",
-                                         codename(array_ref![packet.data,0,32]));
+                                         codename(&packet.data));
                                 Some((sm.clone(),Message::from_bytes(&msg)))
                             },
                             _ => {
@@ -730,12 +762,13 @@ pub fn start_static_node() -> Result<(), Error> {
                             },
                         },
                     None => {
-                        // println!("Not sure what that was! (from {})", packet.ip);
+                        println!("Not sure what that was! ({} from {})",
+                                 codename(&packet.data), packet.ip);
                         None
                     },
                 };
                 if maybe_msg.is_some() {
-                    dht.lock().unwrap().onionboxen.remove(array_ref![packet.data,0,32]);
+                    dht.with_lock(|dht|{dht.onionboxen.remove(array_ref![packet.data,0,32])});
                 }
                 match maybe_msg {
                     None => (),
@@ -743,26 +776,28 @@ pub fn start_static_node() -> Result<(), Error> {
                         println!("Greetings not a valid response");
                     },
                     Some((sm,Message::Response(rgs))) => {
-                        dht.lock().unwrap().accept_gift(&rgs);
+                        dht.with_lock(|dht|{dht.accept_gift(&rgs)});
                         let mut changed_routing = false;
                         for i in 0 .. ROUTE_COUNT {
                             if sm.who_relayed[i] != my_key.public {
                                 // println!("Increasing liveness for {}!", sm.who_relayed[i]);
-                                let mut dht = dht.lock().unwrap();
-                                dht.liveness.insert(sm.who_relayed[i],
-                                                    MAX_LIVENESS);
-                                dht.newbies.remove(&sm.who_relayed[i]);
+                                dht.with_lock(|dht| {
+                                    dht.liveness.insert(sm.who_relayed[i],
+                                                        MAX_LIVENESS);
+                                    dht.newbies.remove(&sm.who_relayed[i]);
+                                });
                                 changed_routing = true;
                             }
                         }
                         if changed_routing {
-                            dht.lock().unwrap().print("routing worked");
+                            dht.with_lock(|dht|{dht.print("routing worked")});
                         }
                         if rgs[0].key == my_key.public {
                             // println!("My address is {}", rgs[0].addr);
-                            let mut dht = dht.lock().unwrap();
-                            dht.liveness.insert(my_key.public, MAX_LIVENESS);
-                            dht.newbies.remove(&my_key.public);
+                            dht.with_lock(|dht| {
+                                dht.liveness.insert(my_key.public, MAX_LIVENESS);
+                                dht.newbies.remove(&my_key.public);
+                            });
                         }
                     },
                     Some((_,Message::PickUp {..})) => {
