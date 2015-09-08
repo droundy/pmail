@@ -325,23 +325,24 @@ pub fn read_or_generate_keypair(mut dirname: std::path::PathBuf)
 
 fn bingley() -> RoutingGift {
     let bingley_addr = SocketAddr::from_str("128.193.96.51:54321").unwrap();
-    let bingley_key = crypto::PublicKey([212, 73, 217, 51, 40, 221, 144,
-                                         145, 86, 176, 174, 255, 41, 29,
-                                         172, 191, 136, 196, 210, 157, 215,
-                                         11, 144, 238, 198, 47, 200, 43,
-                                         227, 172, 76, 45]);
+    let bingley_key = crypto::PublicKey([242, 121, 245, 62, 249, 186, 221,
+                                         199, 255, 254, 235, 0, 41, 156, 123,
+                                         232, 188, 66, 156, 217, 175, 163,
+                                         242, 219, 147, 171, 65, 126, 215,
+                                         186, 24, 126]);
     RoutingGift { addr: bingley_addr, key: bingley_key }
 }
 fn wentworth() -> RoutingGift {
     let addr = SocketAddr::from_str("128.193.96.92:54321").unwrap();
-    let key = crypto::PublicKey([11, 240, 145, 18, 32, 184, 142, 166,
-                                 33, 129, 115, 50, 104, 216, 55, 157,
-                                 7, 182, 234, 184, 171, 156, 145, 40,
-                                 165, 46, 88, 109, 211, 239, 22, 106]);
+    let key = crypto::PublicKey([18, 135, 54, 70, 246, 216, 114, 21,
+                                 112, 9, 254, 205, 6, 248, 113, 76, 45,
+                                 77, 103, 176, 148, 102, 13, 67, 17,
+                                 171, 197, 63, 142, 18, 226, 23]);
     RoutingGift { addr: addr, key: key }
 }
 
 fn codename(text: &[u8]) -> String {
+    let long_version = false;
     let adjectives = ["good", "happy", "nice", "evil", "sloppy", "slovenly",
                       "powerful", "strong", "flying", "mad", "fast",
                       "indestructable",
@@ -356,11 +357,22 @@ fn codename(text: &[u8]) -> String {
                  "republican", "democrat", "elephant", "congressman",
                  "villain", "archvillain", "enemy", "sidekick",
                  "bunny", "cat", "kitty", "boy", "girl", "man", "woman"];
+    let verbs = ["loves", "hates", "smooches", "bonks", "slaps", "pets",
+                 "stalks", "snogs", "bewitches", "argues with", "identifies",
+                 "watches", "gazes at", "chases", "barks at", "assasinates"];
     if text.len() < 2 {
         return format!("{:?}", text);
     }
-    format!("{} {}", adjectives[text[0] as usize % adjectives.len()],
-            nouns[text[1] as usize % nouns.len()])
+    if long_version {
+        format!("{} {} {} {} {}", adjectives[text[0] as usize % adjectives.len()],
+                nouns[text[1] as usize % nouns.len()],
+                verbs[(text.len() + text[2] as usize) % verbs.len()],
+                adjectives[text[text.len()-2] as usize % adjectives.len()],
+                nouns[text[text.len()-1] as usize % nouns.len()])
+    } else {
+        format!("{} {}", adjectives[text[0] as usize % adjectives.len()],
+                nouns[text[1] as usize % nouns.len()])
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -376,7 +388,7 @@ struct SentMsg {
 }
 
 const TIMER_WINDOW: usize = 60*6; // one hour?
-const MAX_LIVENESS: u8 = 2*(ROUTE_COUNT as u8);
+const MAX_LIVENESS: u8 = (ROUTE_COUNT as u8);
 
 struct DHT {
     newbies: HashSet<crypto::PublicKey>,
