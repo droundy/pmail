@@ -613,7 +613,7 @@ impl DHT {
 
         let mut ob = onionbox(&keys_and_routes, recipient).unwrap();
         ob.add_payload(self.my_key, &payload);
-        println!("greeting: {} -> ... -> {}\n",
+        println!("greeting: {} -> ... -> {}",
                  codename(&ob.packet()), codename(&ob.return_magic()));
         (route[0].addr, SentMsg { ob: ob, who_relayed: who_relayed })
     }
@@ -742,7 +742,7 @@ pub fn start_static_node() -> Result<(), Error> {
                                         let gift = dht.with_lock(|dht|{dht.construct_gift()});
                                         Message::Response(gift).bytes(&mut response);
                                         oob.respond(&my_key, &response);
-                                        println!("Responding {} {} -> {} {}",
+                                        println!("\nRelaying {} {} -> {} {}",
                                                  codename(&packet.data), packet.ip,
                                                  codename(&oob.packet()), routing.ip);
                                         dht.with_lock(|dht|{dht.schedule(routing.eta,
@@ -760,7 +760,7 @@ pub fn start_static_node() -> Result<(), Error> {
                     }
                 } else {
                     // This is a packet that we should relay along.
-                    println!("Relaying {} {} -> {} {}",
+                    println!("\nRelaying {} {} -> {} {}",
                              codename(&packet.data), packet.ip,
                              codename(&oob.packet()), routing.ip);
                     dht.with_lock(|dht|{dht.schedule(routing.eta, &udp::RawEncryptedMessage{
@@ -774,10 +774,6 @@ pub fn start_static_node() -> Result<(), Error> {
                     Some(sm) =>
                         match sm.ob.read_return(my_key, &packet.data) {
                             Ok(msg) => {
-                                if REPORT_WHOAMIS || sm.who_relayed[1] != my_key.public {
-                                    println!("| {} ====> :)",
-                                             codename(&packet.data));
-                                }
                                 Some((sm.clone(),Message::from_bytes(&msg)))
                             },
                             _ => {
@@ -797,7 +793,8 @@ pub fn start_static_node() -> Result<(), Error> {
                 match maybe_msg {
                     None => (),
                     Some((_,Message::Greetings(_))) => {
-                        println!("Greetings not a valid response");
+                        println!("\nGreetings not a valid response: {}",
+                                 codename(&packet.data));
                     },
                     Some((sm,Message::Response(rgs))) => {
                         dht.with_lock(|dht|{dht.accept_gift(&rgs)});
@@ -811,6 +808,9 @@ pub fn start_static_node() -> Result<(), Error> {
                                 });
                             }
                         }
+                        if REPORT_WHOAMIS || sm.who_relayed[1] != my_key.public {
+                            println!("\nResponse received: {}", codename(&packet.data));
+                        }
                         dht.with_lock(|dht|{dht.print("routing worked")});
                         if rgs[0].key == my_key.public {
                             // println!("My address is {}", rgs[0].addr);
@@ -821,9 +821,11 @@ pub fn start_static_node() -> Result<(), Error> {
                         }
                     },
                     Some((_,Message::PickUp {..})) => {
+                        println!("\nPickup request: {}", codename(&packet.data));
                         println!("Pickup not yet handled");
                     },
                     Some((_,Message::ForwardPlease {..})) => {
+                        println!("\nForward request: {}", codename(&packet.data));
                         println!("Forward not yet handled");
                     },
                 }
