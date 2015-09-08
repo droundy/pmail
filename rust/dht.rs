@@ -14,6 +14,8 @@ use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::{Arc,Mutex};
 
+const REPORT_WHOAMIS: bool = false;
+
 trait MyBytes<T> {
     fn bytes(&self, &mut T);
     fn from_bytes(&T) -> Self;
@@ -395,6 +397,7 @@ struct DHT {
     addresses: HashMap<crypto::PublicKey, SocketAddr>,
     pubkeys: HashMap<SocketAddr, crypto::PublicKey>,
     liveness: HashMap<crypto::PublicKey, u8>,
+    old_liveness: HashMap<crypto::PublicKey, u8>,
     my_key: crypto::KeyPair,
     timer: [Option<ScheduledTransmission>; TIMER_WINDOW],
     /// When we send messages, we should store their OnionBoxen in this
@@ -430,6 +433,7 @@ impl DHT {
             pubkeys: HashMap::new(),
             onionboxen: HashMap::new(),
             liveness: HashMap::new(),
+            old_liveness: HashMap::new(),
             my_key: *myself,
             timer: [None; TIMER_WINDOW],
             send_period_ms: send_period_ms,
@@ -547,7 +551,6 @@ impl DHT {
                     ip: addr,
                     data: sm.ob.packet(),
                 };
-                let mut changed_liveness = false;
                 for i in 0 .. ROUTE_COUNT {
                     let k = sm.who_relayed[i];
                     if k != self.my_key.public {
@@ -555,7 +558,6 @@ impl DHT {
                             None => false,
                             Some(liveness) => {
                                 *liveness -= 1;
-                                changed_liveness = true;
                                 *liveness == 0
                             },
                         };
@@ -565,9 +567,7 @@ impl DHT {
                         }
                     }
                 }
-                if changed_liveness {
-                    self.print("changed liveness");
-                }
+                self.print("changed liveness");
                 // The following enables us to easily check for a response
                 // to this message.
                 self.onionboxen.insert(sm.ob.return_magic(), sm);
@@ -615,7 +615,6 @@ impl DHT {
         ob.add_payload(self.my_key, &payload);
         println!("greeting: {} -> ... -> {}\n",
                  codename(&ob.packet()), codename(&ob.return_magic()));
-        println!("greeting: {}\n", codename(&ob.return_magic()));
         (route[0].addr, SentMsg { ob: ob, who_relayed: who_relayed })
     }
     fn whoami(&mut self, who: &RoutingGift) -> (SocketAddr, SentMsg) {
@@ -634,8 +633,11 @@ impl DHT {
 
         let mut ob = onionbox(&keys_and_routes, 0).unwrap();
         ob.add_payload(self.my_key, &hello_payload);
-        println!("whoami: {} -> {} -> {}\n",
-                 codename(&ob.packet()), who.addr, codename(&ob.return_magic()));
+        if REPORT_WHOAMIS {
+            println!("whoami: {} -> {} -> {}\n",
+                     codename(&ob.packet()), who.addr,
+                     codename(&ob.return_magic()));
+        }
         (who.addr, SentMsg { ob: ob, who_relayed: [self.my_key.public; ROUTE_COUNT] })
     }
 
@@ -649,17 +651,20 @@ impl DHT {
         }
         self.greet()
     }
-    fn print(&self, note: &str) {
-        println!("Routing table {}:", note);
-        for (k,a) in self.addresses.iter() {
-            match self.liveness.get(k) {
-                Some(liveness) => println!(" {} -> {} [{}]", k, a, liveness),
-                _ => if self.newbies.contains(k) {
-                    println!(" {} -> {} N", k, a);
-                } else {
-                    println!(" {} -> {}", k, a);
-                },
+    fn print(&mut self, note: &str) {
+        if self.old_liveness != self.liveness {
+            println!("Routing table {}:", note);
+            for (k,a) in self.addresses.iter() {
+                match self.liveness.get(k) {
+                    Some(liveness) => println!(" {} -> {} [{}]", k, a, liveness),
+                    _ => if self.newbies.contains(k) {
+                        println!(" {} -> {} N", k, a);
+                    } else {
+                        println!(" {} -> {}", k, a);
+                    },
+                }
             }
+            self.old_liveness = self.liveness.clone();
         }
     }
 }
@@ -769,8 +774,10 @@ pub fn start_static_node() -> Result<(), Error> {
                     Some(sm) =>
                         match sm.ob.read_return(my_key, &packet.data) {
                             Ok(msg) => {
-                                println!("| {} ====> :)",
-                                         codename(&packet.data));
+                                if REPORT_WHOAMIS || sm.who_relayed[1] != my_key.public {
+                                    println!("| {} ====> :)",
+                                             codename(&packet.data));
+                                }
                                 Some((sm.clone(),Message::from_bytes(&msg)))
                             },
                             _ => {
@@ -794,7 +801,6 @@ pub fn start_static_node() -> Result<(), Error> {
                     },
                     Some((sm,Message::Response(rgs))) => {
                         dht.with_lock(|dht|{dht.accept_gift(&rgs)});
-                        let mut changed_routing = false;
                         for i in 0 .. ROUTE_COUNT {
                             if sm.who_relayed[i] != my_key.public {
                                 // println!("Increasing liveness for {}!", sm.who_relayed[i]);
@@ -803,12 +809,9 @@ pub fn start_static_node() -> Result<(), Error> {
                                                         MAX_LIVENESS);
                                     dht.newbies.remove(&sm.who_relayed[i]);
                                 });
-                                changed_routing = true;
                             }
                         }
-                        if changed_routing {
-                            dht.with_lock(|dht|{dht.print("routing worked")});
-                        }
+                        dht.with_lock(|dht|{dht.print("routing worked")});
                         if rgs[0].key == my_key.public {
                             // println!("My address is {}", rgs[0].addr);
                             dht.with_lock(|dht| {
