@@ -4,5 +4,10 @@ extern crate onionsalt;
 use pmail::dht;
 
 fn main() {
-    dht::start_static_node().unwrap();
+    println!("Getting started!");
+    let (_send, receive) = dht::start_static_node().unwrap();
+    for r in receive.iter() {
+        println!("received {:?}", r);
+    }
+    println!("All done!");
 }

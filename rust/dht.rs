@@ -7,11 +7,14 @@ use onionsalt::{ROUTE_COUNT,
 use onionsalt::{crypto,
                 onionbox,
                 onionbox_open};
+use std::fmt::{Formatter, Debug};
+use std::fmt;
 use std::io::Error;
 use std;
 use super::udp;
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
+use std::sync::mpsc::{ Receiver, Sender, channel };
 use std::sync::{Arc,Mutex};
 
 const REPORT_WHOAMIS: bool = false;
@@ -136,7 +139,7 @@ pub const NUM_IN_RESPONSE: usize = 10;
 
 /// The `USER_MESSAGE_LENGTH` is the size of actual content that can
 /// be encrypted and authenticated to send to some receiver.
-pub const USER_MESSAGE_LENGTH: usize = 512;
+pub const USER_MESSAGE_LENGTH: usize = 511;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RoutingGift {
@@ -187,15 +190,6 @@ impl MyBytes<[u8; (18+32)*NUM_IN_RESPONSE]> for [RoutingGift; NUM_IN_RESPONSE] {
 }
 
 
-// impl RoutingGift {
-//     fn new() -> RoutingGift {
-//         RoutingGift {
-//             addr: Addr::V4{ addr: [0;4], port: 0 },
-//             key: crypto::PublicKey([0;32]),
-//         }
-//     }
-// }
-
 pub enum Message {
     Greetings([RoutingGift; NUM_IN_RESPONSE]),
     Response([RoutingGift; NUM_IN_RESPONSE]),
@@ -205,9 +199,7 @@ pub enum Message {
     },
     ForwardPlease {
         destination: crypto::PublicKey,
-        message: [u8; 512], // this is a hokey and lazy
-                                 // workaround for lack of derive for
-                                 // arrays larger than 32.
+        message: [u8; USER_MESSAGE_LENGTH],
     },
 }
 
@@ -228,9 +220,10 @@ impl MyBytes<[u8; PAYLOAD_LENGTH]> for Message {
                 gifts.bytes(array_mut_ref![out,33,500]);
             },
             Message::ForwardPlease { destination, message } => {
-                out[0] = b'f';
-                destination.bytes(array_mut_ref![out,1,32]);
-                *array_mut_ref![out,33,512] = message;
+                let (t,d,m) = mut_array_refs![out,1,32,511];
+                t[0] = b'f';
+                destination.bytes(d);
+                *m = message;
             },
         }
     }
@@ -239,7 +232,11 @@ impl MyBytes<[u8; PAYLOAD_LENGTH]> for Message {
             b'g' => Message::Greetings(RoutingGifts::from_bytes(array_ref![inp,1,500])),
             b'r' => Message::Response(RoutingGifts::from_bytes(array_ref![inp,1,500])),
             b'p' => unimplemented!(),
-            b'f' => unimplemented!(),
+            b'f' => {
+                let (_,d,m) = array_refs![inp,1,32,511];
+                let destination = crypto::PublicKey::from_bytes(d);
+                Message::ForwardPlease{ destination: destination, message: *m }
+            },
             _ => unimplemented!(),
         }
     }
@@ -398,6 +395,8 @@ struct DHT {
     pubkeys: HashMap<SocketAddr, crypto::PublicKey>,
     liveness: HashMap<crypto::PublicKey, u8>,
     old_liveness: HashMap<crypto::PublicKey, u8>,
+    to_forward: HashMap<crypto::PublicKey, onionsalt::OpenedOnionBox>,
+    to_pickup: HashMap<crypto::PublicKey, Message>,
     my_key: crypto::KeyPair,
     timer: [Option<ScheduledTransmission>; TIMER_WINDOW],
     /// When we send messages, we should store their OnionBoxen in this
@@ -432,6 +431,8 @@ impl DHT {
             addresses: HashMap::new(),
             pubkeys: HashMap::new(),
             onionboxen: HashMap::new(),
+            to_forward: HashMap::new(),
+            to_pickup: HashMap::new(),
             liveness: HashMap::new(),
             old_liveness: HashMap::new(),
             my_key: *myself,
@@ -671,7 +672,8 @@ impl DHT {
 
 /// Start relaying messages with a static public key (i.e. one that
 /// does not change).
-pub fn start_static_node() -> Result<(), Error> {
+pub fn start_static_node() -> Result<(Sender<UserMessage>,
+                                      Receiver<UserMessage>), Error> {
     let keydirname = match std::env::home_dir() {
         Some(hd) => hd,
         None => std::path::PathBuf::from("."),
@@ -708,130 +710,215 @@ pub fn start_static_node() -> Result<(), Error> {
         });
     }
 
-    for packet in get.iter() {
-        match onionbox_open(&packet.data, &my_key.secret) {
-            Ok(mut oob) => {
-                let routing = RoutingInfo::from_bytes(&oob.routing());
-                if routing.is_for_me {
-                    match oob.payload(&my_key) {
-                        Err(e) => {
-                            println!("Unable to read message! {:?}", e);
-                        },
-                        Ok(payload) => {
-                            if routing.who_am_i {
-                                let mut you_are = [0; PAYLOAD_LENGTH];
-                                let mut gift = dht.name_lock("gift", |dht|{dht.construct_gift()});
-                                gift[0] = RoutingGift{ addr: packet.ip,
-                                                       key: oob.key() };
-                                // add the sender to our database of routers
-                                dht.name_lock("accept", |dht|{dht.accept_single_gift(&gift[0])});
-                                Message::Response(gift).bytes(&mut you_are);
-                                oob.respond(&my_key, &you_are);
-                                dht.name_lock("schedule",
-                                              |dht|{dht.schedule_if_convenient(routing.eta,
-                                                                               &udp::RawEncryptedMessage{
-                                                                                   ip: packet.ip,
-                                                                                   data: oob.packet(),
-                                                                               })});
-                            } else {
-                                match Message::from_bytes(&payload) {
-                                    Message::Greetings(gs) => {
-                                        dht.with_lock(|dht|{dht.accept_gift(&gs)});
+    let (sender1, _receiver1) = channel(); // for sending messages
+    let (sender2, receiver2) = channel(); // for receiving messages
 
-                                        let mut response = [0; PAYLOAD_LENGTH];
-                                        let gift = dht.with_lock(|dht|{dht.construct_gift()});
-                                        Message::Response(gift).bytes(&mut response);
-                                        oob.respond(&my_key, &response);
-                                        println!("\nRelaying {} {} -> {} {}",
-                                                 codename(&packet.data), packet.ip,
-                                                 codename(&oob.packet()), routing.ip);
-                                        dht.with_lock(|dht|{dht.schedule(routing.eta,
-                                                                         &udp::RawEncryptedMessage{
-                                                                             ip: routing.ip,
-                                                                             data: oob.packet(),
-                                                                         })});
-                                    },
-                                    _ => {
-                                        println!("Something else for me!\n\n");
-                                    },
+    std::thread::spawn(move|| {
+        for packet in get.iter() {
+            match onionbox_open(&packet.data, &my_key.secret) {
+                Ok(mut oob) => {
+                    let routing = RoutingInfo::from_bytes(&oob.routing());
+                    if routing.is_for_me {
+                        match oob.payload(&my_key) {
+                            Err(e) => {
+                                println!("Unable to read message! {:?}", e);
+                            },
+                            Ok(payload) => {
+                                if routing.who_am_i {
+                                    let mut you_are = [0; PAYLOAD_LENGTH];
+                                    let mut gift = dht.name_lock("gift", |dht|{dht.construct_gift()});
+                                    gift[0] = RoutingGift{ addr: packet.ip,
+                                                           key: oob.key() };
+                                    // add the sender to our database of routers
+                                    dht.name_lock("accept", |dht|{dht.accept_single_gift(&gift[0])});
+                                    Message::Response(gift).bytes(&mut you_are);
+                                    oob.respond(&my_key, &you_are);
+                                    dht.name_lock("schedule",
+                                                  |dht|{dht.schedule_if_convenient(routing.eta,
+                                                                                   &udp::RawEncryptedMessage{
+                                                                                       ip: packet.ip,
+                                                                                       data: oob.packet(),
+                                                                                   })});
+                                } else {
+                                    match Message::from_bytes(&payload) {
+                                        Message::Greetings(gs) => {
+                                            dht.with_lock(|dht|{dht.accept_gift(&gs)});
+
+                                            let mut response = [0; PAYLOAD_LENGTH];
+                                            let gift = dht.with_lock(|dht|{dht.construct_gift()});
+                                            Message::Response(gift).bytes(&mut response);
+                                            oob.respond(&my_key, &response);
+                                            println!("\nRelaying {} {} -> {} {}",
+                                                     codename(&packet.data), packet.ip,
+                                                     codename(&oob.packet()), routing.ip);
+                                            dht.with_lock(|dht|{dht.schedule(routing.eta,
+                                                                             &udp::RawEncryptedMessage{
+                                                                                 ip: routing.ip,
+                                                                                 data: oob.packet(),
+                                                                             })});
+                                        },
+                                        Message::PickUp { destination, gifts } => {
+                                            println!("\nPickup request: {}", codename(&packet.data));
+                                            let mut dht = dht.lock().unwrap();
+                                            dht.accept_gift(&gifts);
+                                            let ready_to_pickup = dht.to_pickup.contains_key(&destination);
+                                            if ready_to_pickup {
+                                                let mut buffer = [0;544];
+                                                dht.to_pickup[&destination].bytes(&mut buffer);
+                                                oob.respond(&my_key, &buffer);
+                                                println!("\nForwarding {} {} -> {} {}",
+                                                         codename(&destination.0), codename(&buffer),
+                                                         codename(&oob.packet()), routing.ip);
+                                                dht.schedule(routing.eta,
+                                                             &udp::RawEncryptedMessage{
+                                                                 ip: routing.ip,
+                                                                 data: oob.packet(),
+                                                             });
+                                            } else {
+                                                println!("\nNot ready for {} to pick up",
+                                                         codename(&destination.0));
+                                            }
+                                        },
+                                        Message::ForwardPlease { destination, message } => {
+                                            println!("\nForward request: {}", codename(&packet.data));
+                                            let mut dht = dht.lock().unwrap();
+                                            let ready_to_forward = dht.to_forward.contains_key(&destination);
+                                            if ready_to_forward {
+                                                let mut buffer = [0;544];
+                                                Message::ForwardPlease{destination: destination,
+                                                                       message: message}.bytes(&mut buffer);
+                                                let (routing, packet) = {
+                                                    let ref mut foob = dht.to_forward.get_mut(&destination).unwrap();
+                                                    foob.respond(&my_key, &buffer);
+                                                    let routing = RoutingInfo::from_bytes(&foob.routing());
+                                                    println!("\nForwarding {} {} -> {} {}",
+                                                             codename(&destination.0), codename(&buffer),
+                                                             codename(&foob.packet()),
+                                                             routing.ip);
+                                                    (routing, foob.packet())
+                                                };
+                                                dht.schedule(routing.eta,
+                                                             &udp::RawEncryptedMessage{
+                                                                 ip: routing.ip,
+                                                                 data: packet,
+                                                             });
+                                                dht.to_forward.remove(&destination);
+                                            } else {
+                                                println!("\nNot ready for {} to pick up",
+                                                         codename(&destination.0));
+                                            }
+                                        },
+                                        _ => {
+                                            println!("Something else for me!\n\n");
+                                        },
+                                    }
                                 }
                             }
                         }
+                    } else {
+                        // This is a packet that we should relay along.
+                        println!("\nRelaying {} {} -> {} {}",
+                                 codename(&packet.data), packet.ip,
+                                 codename(&oob.packet()), routing.ip);
+                        dht.with_lock(|dht|{dht.schedule(routing.eta, &udp::RawEncryptedMessage{
+                            ip: routing.ip,
+                            data: oob.packet(),
+                        })});
                     }
-                } else {
-                    // This is a packet that we should relay along.
-                    println!("\nRelaying {} {} -> {} {}",
-                             codename(&packet.data), packet.ip,
-                             codename(&oob.packet()), routing.ip);
-                    dht.with_lock(|dht|{dht.schedule(routing.eta, &udp::RawEncryptedMessage{
-                        ip: routing.ip,
-                        data: oob.packet(),
-                    })});
-                }
-            },
-            _ => {
-                let maybe_msg = match dht.lock().unwrap().onionboxen.get(array_ref![packet.data,0,32]) {
-                    Some(sm) =>
-                        match sm.ob.read_return(my_key, &packet.data) {
-                            Ok(msg) => {
-                                Some((sm.clone(),Message::from_bytes(&msg)))
+                },
+                _ => {
+                    let maybe_msg = match dht.lock().unwrap().onionboxen.get(array_ref![packet.data,0,32]) {
+                        Some(sm) =>
+                            match sm.ob.read_return(my_key, &packet.data) {
+                                Ok(msg) => {
+                                    Some((sm.clone(),Message::from_bytes(&msg)))
+                                },
+                                _ => {
+                                    println!("Message illegible!");
+                                    None
+                                },
                             },
-                            _ => {
-                                println!("Message illegible!");
-                                None
-                            },
+                        None => {
+                            println!("Not sure what that was! ({} from {})",
+                                     codename(&packet.data), packet.ip);
+                            None
                         },
-                    None => {
-                        println!("Not sure what that was! ({} from {})",
-                                 codename(&packet.data), packet.ip);
-                        None
-                    },
-                };
-                if maybe_msg.is_some() {
-                    dht.with_lock(|dht|{dht.onionboxen.remove(array_ref![packet.data,0,32])});
-                }
-                match maybe_msg {
-                    None => (),
-                    Some((_,Message::Greetings(_))) => {
-                        println!("\nGreetings not a valid response: {}",
-                                 codename(&packet.data));
-                    },
-                    Some((sm,Message::Response(rgs))) => {
-                        dht.with_lock(|dht|{dht.accept_gift(&rgs)});
-                        for i in 0 .. ROUTE_COUNT {
-                            if sm.who_relayed[i] != my_key.public {
-                                // println!("Increasing liveness for {}!", sm.who_relayed[i]);
+                    };
+                    if maybe_msg.is_some() {
+                        dht.with_lock(|dht|{dht.onionboxen.remove(array_ref![packet.data,0,32])});
+                    }
+                    match maybe_msg {
+                        None => (),
+                        Some((_,Message::Greetings(_))) => {
+                            println!("\nGreetings not a valid response: {}",
+                                     codename(&packet.data));
+                        },
+                        Some((sm,Message::Response(rgs))) => {
+                            dht.with_lock(|dht|{dht.accept_gift(&rgs)});
+                            for i in 0 .. ROUTE_COUNT {
+                                if sm.who_relayed[i] != my_key.public {
+                                    // println!("Increasing liveness for {}!", sm.who_relayed[i]);
+                                    dht.with_lock(|dht| {
+                                        dht.liveness.insert(sm.who_relayed[i],
+                                                            MAX_LIVENESS);
+                                        dht.newbies.remove(&sm.who_relayed[i]);
+                                    });
+                                }
+                            }
+                            if REPORT_WHOAMIS || sm.who_relayed[1] != my_key.public {
+                                println!("\nResponse received: {}", codename(&packet.data));
+                            }
+                            dht.with_lock(|dht|{dht.print("routing worked")});
+                            if rgs[0].key == my_key.public {
+                                // println!("My address is {}", rgs[0].addr);
                                 dht.with_lock(|dht| {
-                                    dht.liveness.insert(sm.who_relayed[i],
-                                                        MAX_LIVENESS);
-                                    dht.newbies.remove(&sm.who_relayed[i]);
+                                    dht.liveness.insert(my_key.public, MAX_LIVENESS);
+                                    dht.newbies.remove(&my_key.public);
                                 });
                             }
-                        }
-                        if REPORT_WHOAMIS || sm.who_relayed[1] != my_key.public {
-                            println!("\nResponse received: {}", codename(&packet.data));
-                        }
-                        dht.with_lock(|dht|{dht.print("routing worked")});
-                        if rgs[0].key == my_key.public {
-                            // println!("My address is {}", rgs[0].addr);
-                            dht.with_lock(|dht| {
-                                dht.liveness.insert(my_key.public, MAX_LIVENESS);
-                                dht.newbies.remove(&my_key.public);
-                            });
-                        }
-                    },
-                    Some((_,Message::PickUp {..})) => {
-                        println!("\nPickup request: {}", codename(&packet.data));
-                        println!("Pickup not yet handled");
-                    },
-                    Some((_,Message::ForwardPlease {..})) => {
-                        println!("\nForward request: {}", codename(&packet.data));
-                        println!("Forward not yet handled");
-                    },
-                }
-            },
+                        },
+                        Some((_,Message::PickUp { destination, .. })) => {
+                            println!("\nPickup request for {}: {}",
+                                     codename(&destination.0), codename(&packet.data));
+                            println!("Pickup not yet handled");
+                        },
+                        Some((_,Message::ForwardPlease { destination, message})) => {
+                            println!("\nForward request: {} for {}",
+                                     codename(&packet.data), codename(&destination.0));
+                            sender2.send(UserMessage {
+                                destination: destination,
+                                message: message,
+                            }).unwrap();
+                            println!("Forward not yet handled");
+                        },
+                    }
+                },
+            }
         }
+    });
+    Ok((sender1, receiver2))
+}
+
+pub struct UserMessage {
+    pub destination: crypto::PublicKey,
+    pub message: [u8; USER_MESSAGE_LENGTH],
+}
+
+impl Debug for UserMessage {
+    fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
+        let mut s = format!("{} :", self.destination);
+        for i in 0 .. USER_MESSAGE_LENGTH/32 {
+            s = s + "\n  ";
+            for j in 0 .. 32 {
+                s = s + &format!("{:02x}", self.message[i*32 + j]);
+            }
+        }
+        s = s + "\n";
+        f.write_str(&s)
     }
-    // lopriority.send();
-    Ok(())
+}
+
+#[test]
+fn test_user() {
+    
 }
