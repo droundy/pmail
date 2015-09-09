@@ -618,6 +618,45 @@ impl DHT {
                  codename(&ob.packet()), codename(&ob.return_magic()));
         (route[0].addr, SentMsg { ob: ob, who_relayed: who_relayed })
     }
+    fn attach_ciphertext(&mut self, ciphertext: [u8;PAYLOAD_LENGTH], total_delay_ms: u64)
+                         -> (SocketAddr, SentMsg) {
+        let route = self.pick_route();
+        let mut recipient = self.random_usize() % route.len();
+        // avoid sending greetings to myself!
+        while route[recipient].key == self.my_key.public {
+            recipient = self.random_usize() % route.len();
+        }
+        println!("\nSending a nice message loop of length {}", route.len());
+        let mut keys_and_routes = Vec::new();
+        let mut delay_time = 0;
+        let mut who_relayed = [self.my_key.public; ROUTE_COUNT];
+        for i in 0 .. route.len() {
+            who_relayed[i] = route[i].key;
+            let mut k_and_r = (route[i].key, [0; ROUTING_LENGTH]);
+            let next_addr = if i < route.len()-1 {
+                route[i+1].addr
+            } else {
+                self.addresses[&self.my_key.public]
+            };
+            if i == recipient {
+                println!(" => {}", route[i].addr);
+            } else {
+                println!("    {}", route[i].addr);
+            }
+            let delay_ms = self.send_period_ms + self.random_u64() % total_delay_ms;
+            delay_time += ((delay_ms+999)/1000) as u32;
+            let mut ri = RoutingInfo::new(next_addr, delay_time);
+            ri.is_for_me = i == recipient;
+            ri.who_am_i = false;
+            ri.bytes(&mut k_and_r.1);
+            keys_and_routes.push(k_and_r);
+        }
+        let mut ob = onionbox(&keys_and_routes, recipient).unwrap();
+        ob.add_payload(self.my_key, &ciphertext);
+        println!("sending something: {} -> ... -> {}",
+                 codename(&ob.packet()), codename(&ob.return_magic()));
+        (route[0].addr, SentMsg { ob: ob, who_relayed: who_relayed })
+    }
     fn whoami(&mut self, who: &RoutingGift) -> (SocketAddr, SentMsg) {
         let mut hello_payload = [0; PAYLOAD_LENGTH];
         Message::Greetings([*who; NUM_IN_RESPONSE]).bytes(&mut hello_payload);
@@ -672,7 +711,7 @@ impl DHT {
 
 /// Start relaying messages with a static public key (i.e. one that
 /// does not change).
-pub fn start_static_node() -> Result<(Sender<UserMessage>,
+pub fn start_static_node() -> Result<(Sender<[u8; PAYLOAD_LENGTH]>,
                                       Receiver<UserMessage>), Error> {
     let keydirname = match std::env::home_dir() {
         Some(hd) => hd,
@@ -710,8 +749,19 @@ pub fn start_static_node() -> Result<(Sender<UserMessage>,
         });
     }
 
-    let (sender1, _receiver1) = channel(); // for sending messages
+    let (sender1, receiver1) = channel(); // for sending messages
     let (sender2, receiver2) = channel(); // for receiving messages
+
+    {
+        // a separate copy for sending out user messages.
+        let dht = dht.clone();
+        std::thread::spawn(move|| {
+            for encrypted_payload in receiver1.iter() {
+                let mut dht = dht.lock().unwrap();
+                dht.attach_ciphertext(encrypted_payload, 600);
+            }
+        });
+    }
 
     std::thread::spawn(move|| {
         for packet in get.iter() {
@@ -758,6 +808,11 @@ pub fn start_static_node() -> Result<(Sender<UserMessage>,
                                                                              })});
                                         },
                                         Message::PickUp { destination, gifts } => {
+                                            if destination != oob.key() {
+                                                println!("\nInvalid pickup request: {}",
+                                                         codename(&packet.data));
+                                                continue;
+                                            }
                                             println!("\nPickup request: {}", codename(&packet.data));
                                             let mut dht = dht.lock().unwrap();
                                             dht.accept_gift(&gifts);
@@ -775,9 +830,12 @@ pub fn start_static_node() -> Result<(Sender<UserMessage>,
                                                                  data: oob.packet(),
                                                              });
                                             } else {
-                                                println!("\nNot ready for {} to pick up",
-                                                         codename(&destination.0));
+                                                println!("\nEventually I will deliver {} to {} {}",
+                                                         codename(&destination.0),
+                                                         codename(&oob.packet()), routing.ip);
+                                                dht.to_forward.insert(destination, oob);
                                             }
+                                            dht.to_pickup.remove(&destination);
                                         },
                                         Message::ForwardPlease { destination, message } => {
                                             println!("\nForward request: {}", codename(&packet.data));
@@ -878,9 +936,8 @@ pub fn start_static_node() -> Result<(Sender<UserMessage>,
                             }
                         },
                         Some((_,Message::PickUp { destination, .. })) => {
-                            println!("\nPickup request for {}: {}",
+                            println!("\nInvalid pickup request for {}: {}",
                                      codename(&destination.0), codename(&packet.data));
-                            println!("Pickup not yet handled");
                         },
                         Some((_,Message::ForwardPlease { destination, message})) => {
                             println!("\nForward request: {} for {}",
@@ -889,7 +946,6 @@ pub fn start_static_node() -> Result<(Sender<UserMessage>,
                                 destination: destination,
                                 message: message,
                             }).unwrap();
-                            println!("Forward not yet handled");
                         },
                     }
                 },
