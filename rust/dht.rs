@@ -14,10 +14,19 @@ use std;
 use super::udp;
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
-use std::sync::mpsc::{ Receiver, Sender, channel };
+use std::sync::mpsc::{ Receiver, Sender, channel,
+                       SyncSender, sync_channel, };
 use std::sync::{Arc,Mutex};
 
 const REPORT_WHOAMIS: bool = false;
+
+fn key_distance(a: &crypto::PublicKey, b: &crypto::PublicKey) -> u64 {
+    let mut out = 0;
+    for i in 0..8 {
+        out += ((a.0[i] ^ b.0[i]) as u64) << (i*8);
+    }
+    out
+}
 
 trait MyBytes<T> {
     fn bytes(&self, &mut T);
@@ -286,19 +295,11 @@ pub fn gethostname() -> Result<String, Error> {
     }
 }
 
-pub fn read_or_generate_keypair(mut dirname: std::path::PathBuf)
+pub fn read_or_generate_keypair(name: std::path::PathBuf)
                                 -> Result<crypto::KeyPair, Error> {
     use std::io::Write;
 
-    match gethostname() {
-        Err(_) => {
-            dirname.push(".pmail.key");
-        },
-        Ok(hostname) => {
-            dirname.push(format!(".pmail-{}.key", hostname));
-        },
-    };
-    let name = dirname.as_path();
+    let name = name.as_path();
     match read_keypair(name) {
         Ok(kp) => Ok(kp),
         _ => {
@@ -711,13 +712,25 @@ impl DHT {
 
 /// Start relaying messages with a static public key (i.e. one that
 /// does not change).
-pub fn start_static_node() -> Result<(Sender<[u8; PAYLOAD_LENGTH]>,
+pub fn start_static_node() -> Result<(SyncSender<crypto::PublicKey>,
+                                      Receiver<crypto::PublicKey>,
+                                      Sender<[u8; PAYLOAD_LENGTH]>,
                                       Receiver<UserMessage>), Error> {
-    let keydirname = match std::env::home_dir() {
-        Some(hd) => hd,
-        None => std::path::PathBuf::from("."),
+    let my_key = {
+        let mut name = match std::env::home_dir() {
+            Some(hd) => hd,
+            None => std::path::PathBuf::from("."),
+        };
+        match gethostname() {
+            Err(_) => {
+                name.push(".pmail.key");
+            },
+            Ok(hostname) => {
+                name.push(format!(".pmail-{}.key", hostname));
+            },
+        };
+        read_or_generate_keypair(name).unwrap()
     };
-    let my_key = read_or_generate_keypair(keydirname).unwrap();
 
     let send_period_ms = 1000*10;
     let dht = DHT::new(&my_key, send_period_ms);
@@ -751,6 +764,29 @@ pub fn start_static_node() -> Result<(Sender<[u8; PAYLOAD_LENGTH]>,
 
     let (sender1, receiver1) = channel(); // for sending messages
     let (sender2, receiver2) = channel(); // for receiving messages
+
+    let (send_rendevous_query, receive_rendevous_query) = sync_channel(0); // asking for
+    let (send_rendevous_location, receive_rendevous_location) = sync_channel(0); // asking for
+
+    {
+        // a separate copy for locating rendevous nodes
+        let dht = dht.clone();
+        std::thread::spawn(move|| {
+            for recipient in receive_rendevous_query.iter() {
+                let dht = dht.lock().unwrap();
+                let mut best = bingley().key;
+                let mut best_distance = key_distance(&best, &recipient);
+                for k in dht.addresses.keys() {
+                    let k_distance = key_distance(k, &recipient);
+                    if k_distance < best_distance {
+                        best_distance = k_distance;
+                        best = *k;
+                    }
+                }
+                send_rendevous_location.send(best).unwrap();
+            }
+        });
+    }
 
     {
         // a separate copy for sending out user messages.
@@ -952,7 +988,7 @@ pub fn start_static_node() -> Result<(Sender<[u8; PAYLOAD_LENGTH]>,
             }
         }
     });
-    Ok((sender1, receiver2))
+    Ok((send_rendevous_query, receive_rendevous_location, sender1, receiver2))
 }
 
 pub struct UserMessage {

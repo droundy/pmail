@@ -5,7 +5,7 @@ use pmail::dht;
 
 fn main() {
     println!("Getting started!");
-    let (_send, receive) = dht::start_static_node().unwrap();
+    let (_, _, _send, receive) = dht::start_static_node().unwrap();
     for r in receive.iter() {
         println!("received {:?}", r);
     }
