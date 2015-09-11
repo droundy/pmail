@@ -97,15 +97,17 @@ fn show_logs(rb: &RustBox, logdata: &mut LogData, offset: usize) {
 fn show_addressbook(rb: &RustBox, ab: &AddressBook) -> usize {
     rb.clear();
     let names = ab.list_public_keys();
-    let mut width = "Quit [q]".len();
+    let mut width = "Show messages [m]".len();
     for n in names.iter() {
         if n.len() > width {
             width = n.len();
         }
     }
     let width = width + 3;
-    text_box(rb, "Quit [q]", 0, 0, width, 2);
-    text_boxes(rb, &names, 0, 3, width);
+    text_dbox(rb, "Quit [q]", 0, 0, width);
+    text_dbox_below(rb, "Show logs [l]", 0, 2, width);
+    text_dbox_below(rb, "Show messages [m]", 0, 4, width);
+    text_boxes(rb, &names, 0, 7, width);
     width
 }
 
@@ -181,29 +183,58 @@ fn draw_box(rb: &RustBox, x: usize, y: usize, width: usize, height: usize) {
     }
 }
 
-fn text_box(rb: &RustBox, t: &str, x: usize, y: usize, width: usize, height: usize) {
-    rb.print(x+1+(width - t.len())/2, y+1, rustbox::RB_BOLD, Color::White, Color::Black, t);
+fn draw_box_below(rb: &RustBox, x: usize, y: usize, width: usize, height: usize) {
     draw_box(rb, x, y, width, height);
+    rb.print_char(x, y, rustbox::RB_NORMAL, Color::Green, Color::Black, '├');
+    rb.print_char(x+width, y, rustbox::RB_NORMAL, Color::Green, Color::Black, '┤');
+}
+
+// ═	║	╔	╗	╚	╝	╞	╟	╠	╡	╢	╣	╤	╥	╦	╧	╨	╩	╪	╫	╬
+
+fn draw_dbox(rb: &RustBox, x: usize, y: usize, width: usize, height: usize) {
+    rb.print_char(x, y, rustbox::RB_NORMAL, Color::Green, Color::Black, '╔');
+    rb.print_char(x, y+height, rustbox::RB_NORMAL, Color::Green, Color::Black, '╚');
+    rb.print_char(x+width, y, rustbox::RB_NORMAL, Color::Green, Color::Black, '╗');
+    rb.print_char(x+width, y+height, rustbox::RB_NORMAL, Color::Green, Color::Black, '╝');
+    for j in 1 .. width {
+        rb.print_char(x+j, y, rustbox::RB_NORMAL, Color::Green, Color::Black, '═');
+        rb.print_char(x+j, y+height, rustbox::RB_NORMAL, Color::Green, Color::Black, '═');
+    }
+    for j in 1 .. height {
+        rb.print_char(x, y+j, rustbox::RB_NORMAL, Color::Green, Color::Black, '║');
+        rb.print_char(x+width, y+j, rustbox::RB_NORMAL, Color::Green, Color::Black, '║');
+    }
+}
+
+fn draw_dbox_below(rb: &RustBox, x: usize, y: usize, width: usize, height: usize) {
+    draw_dbox(rb, x, y, width, height);
+    rb.print_char(x, y, rustbox::RB_NORMAL, Color::Green, Color::Black, '╠');
+    rb.print_char(x+width, y, rustbox::RB_NORMAL, Color::Green, Color::Black, '╣');
+}
+
+fn text_dbox(rb: &RustBox, t: &str, x: usize, y: usize, width: usize) {
+    rb.print(x+1+(width - t.len())/2, y+1, rustbox::RB_BOLD, Color::White, Color::Black, t);
+    draw_dbox(rb, x, y, width, 2);
+}
+
+fn text_dbox_below(rb: &RustBox, t: &str, x: usize, y: usize, width: usize) {
+    rb.print(x+1+(width - t.len())/2, y+1, rustbox::RB_BOLD, Color::White, Color::Black, t);
+    draw_dbox_below(rb, x, y, width, 2);
+}
+
+fn text_box(rb: &RustBox, t: &str, x: usize, y: usize, width: usize) {
+    rb.print(x+1+(width - t.len())/2, y+1, rustbox::RB_BOLD, Color::White, Color::Black, t);
+    draw_box(rb, x, y, width, 2);
+}
+
+fn text_box_below(rb: &RustBox, t: &str, x: usize, y: usize, width: usize) {
+    rb.print(x+1+(width - t.len())/2, y+1, rustbox::RB_BOLD, Color::White, Color::Black, t);
+    draw_box_below(rb, x, y, width, 2);
 }
 
 fn text_boxes(rb: &RustBox, names: &[&String], x: usize, y: usize, width: usize) {
-    for i in 0 .. names.len() {
-        rb.print_char(x, y + i*2, rustbox::RB_NORMAL, Color::Green, Color::Black, '├');
-        for j in 1 .. width {
-            rb.print_char(j, y + i*2, rustbox::RB_NORMAL, Color::Green, Color::Black, '─');
-        }
-        rb.print_char(width, y + i*2, rustbox::RB_NORMAL, Color::Green, Color::Black, '┤');
-        rb.print_char(0, y + i*2+1, rustbox::RB_NORMAL, Color::Green, Color::Black, '│');
-        rb.print_char(width, y + i*2+1, rustbox::RB_NORMAL, Color::Green, Color::Black, '│');
-        rb.print(x+1+(width - names[i].len())/2, y + i*2+1,
-                 rustbox::RB_BOLD, Color::White, Color::Black, names[i]);
+    text_box(rb, names[0], x, y, width);
+    for i in 1 .. names.len() {
+        text_box_below(rb, names[i], x, y+2*i, width);
     }
-    rb.print_char(x, y + names.len()*2, rustbox::RB_NORMAL, Color::Green, Color::Black, '└');
-    for j in 1 .. width {
-        rb.print_char(x+j, y + names.len()*2, rustbox::RB_NORMAL, Color::Green, Color::Black, '─');
-    }
-    rb.print_char(x+width, y + names.len()*2, rustbox::RB_NORMAL, Color::Green, Color::Black, '┘');
-
-    rb.print_char(x, y, rustbox::RB_NORMAL, Color::Green, Color::Black, '┌');
-    rb.print_char(x+width, y, rustbox::RB_NORMAL, Color::Green, Color::Black, '┐');
 }
