@@ -3,6 +3,9 @@
 #[macro_use]
 extern crate arrayref;
 
+#[macro_use]
+extern crate log;
+
 extern crate onionsalt;
 
 pub mod udp;

@@ -48,6 +48,12 @@ impl AddressBook {
     pub fn assert_public_id(&mut self, id: &str, k: &crypto::PublicKey) {
         self.public_ids.insert(id.to_string(), *k);
     }
+    /// Ugh, this function returns an ugly type and should be changed
+    /// to return an `Iterator` when I understand how to do this.
+    pub fn list_public_keys(&self) -> Vec<&String> {
+        use std::iter::FromIterator;
+        Vec::from_iter(self.public_ids.keys())
+    }
     fn public_secret_dirs() -> Result<(std::path::PathBuf, std::path::PathBuf), std::io::Error> {
         let mut address_dir = match std::env::home_dir() {
             Some(hd) => hd,

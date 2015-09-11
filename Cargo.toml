@@ -24,4 +24,6 @@ rustbox = "0.7"
 onionsalt = { version = "*", git = "https://github.com/droundy/onionsalt" }
 arrayref = "0.3.0"
 
+log = "0.3"
+env_logger = "*"
 time = "0.1"
