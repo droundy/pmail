@@ -2,6 +2,7 @@
 extern crate arrayref;
 
 extern crate log;
+extern crate time;
 
 extern crate pmail;
 extern crate onionsalt;
@@ -94,20 +95,43 @@ fn show_logs(rb: &RustBox, logdata: &mut LogData, offset: usize) {
     }
     draw_box(rb, offset, 0, right-offset-1, bottom-1);
 }
-fn show_addressbook(rb: &RustBox, ab: &AddressBook) -> usize {
+fn show_finduser(rb: &RustBox, logdata: &mut LogData, query: &str, offset: usize) {
+    while let Ok(s) = logdata.r.try_recv() {
+        logdata.messages.push(s);
+    }
+    let right = rb.width();
+    let bottom = rb.height() - 3;
+    if logdata.messages.len() > bottom - 1 {
+        let start = logdata.messages.len() - (bottom - 1);
+        for i in 0 .. bottom-1 {
+            rb.print(offset+1, 1 + i,
+                     rustbox::RB_NORMAL, Color::White, Color::Black, &logdata.messages[start+i]);
+        }
+    } else {
+        for i in 0 .. logdata.messages.len() {
+            rb.print(offset+1, 1 + i,
+                     rustbox::RB_NORMAL, Color::White, Color::Black, &logdata.messages[i]);
+        }
+    }
+    draw_box(rb, offset, 0, right-offset-1, bottom);
+    text_box_below(rb, query, offset, bottom, right-offset-1);
+}
+fn show_addressbook(rb: &RustBox, ab: &AddressBook, us: UserState) -> usize {
     rb.clear();
     let names = ab.list_public_keys();
-    let mut width = "Show messages [m]".len();
+    let mut width = "Show messages [p]".len();
     for n in names.iter() {
         if n.len() > width {
             width = n.len();
         }
     }
     let width = width + 3;
-    text_dbox(rb, "Quit [q]", 0, 0, width);
-    text_dbox_below(rb, "Show logs [l]", 0, 2, width);
-    text_dbox_below(rb, "Show messages [m]", 0, 4, width);
-    text_boxes(rb, &names, 0, 7, width);
+    let mkbold = |b| { if b { rustbox::RB_BOLD } else { rustbox::RB_NORMAL } };
+    text_dbox(rb, "Quit [q]", mkbold(false), Color::White, 0, 0, width);
+    text_dbox_below(rb, "Show logs [l]", mkbold(us == UserState::Logs), Color::White, 0, 2, width);
+    text_dbox_below(rb, "Show messages [m]", mkbold(us == UserState::Messages), Color::White, 0, 4, width);
+    text_dbox_below(rb, "Find user [u]", mkbold(us == UserState::FindUser), Color::White, 0, 6, width);
+    text_boxes(rb, &names, 0, 9, width);
     width
 }
 
@@ -151,14 +175,43 @@ fn main() {
         Result::Err(e) => panic!("{}", e),
     };
 
+    let mut us = UserState::Logs;
+    let mut finduser_query = String::new();
     loop {
-        let width = show_addressbook(&rustbox, &addressbook);
-        show_logs(&rustbox, &mut logdata, width+1);
+        match us {
+            UserState::Logs => {
+                let width = show_addressbook(&rustbox, &addressbook, us);
+                show_logs(&rustbox, &mut logdata, width+1);
+            },
+            UserState::Messages => {
+                let width = show_addressbook(&rustbox, &addressbook, us);
+                show_logs(&rustbox, &mut logdata, width+1);
+            },
+            UserState::FindUser => {
+                let width = show_addressbook(&rustbox, &addressbook, us);
+                show_finduser(&rustbox, &mut logdata, &finduser_query, width+1);
+            },
+        }
         rustbox.present();
-        match rustbox.poll_event(false) {
+        match rustbox.peek_event(time::Duration::milliseconds(500), false) {
             Ok(rustbox::Event::KeyEvent(key)) => {
                 match key {
-                    Some(Key::Char('q')) => { break; }
+                    Some(Key::Ctrl('q')) => { break; }
+                    Some(Key::Esc) => { break; }
+                    Some(Key::Ctrl('l')) => { us = UserState::Logs; }
+                    Some(Key::Ctrl('p')) => { us = UserState::Messages; }
+                    Some(Key::Ctrl('u')) => { us = UserState::FindUser; }
+                    Some(Key::Char(c)) => {
+                        match us {
+                            UserState::Logs => { }
+                            UserState::FindUser => { finduser_query.push(c); }
+                            UserState::Messages => { finduser_query.push(c); }
+                        }
+                    }
+                    Some(Key::Enter) => {
+                        finduser_query = String::new();
+                    }
+                    Some(Key::Backspace) => { finduser_query.pop(); }
                     _ => { }
                 }
             },
@@ -166,6 +219,13 @@ fn main() {
             _ => { }
         }
     }
+}
+
+#[derive(Clone,Copy,Eq,PartialEq)]
+enum UserState {
+    Logs,
+    Messages,
+    FindUser,
 }
 
 fn draw_box(rb: &RustBox, x: usize, y: usize, width: usize, height: usize) {
@@ -212,13 +272,15 @@ fn draw_dbox_below(rb: &RustBox, x: usize, y: usize, width: usize, height: usize
     rb.print_char(x+width, y, rustbox::RB_NORMAL, Color::Green, Color::Black, '╣');
 }
 
-fn text_dbox(rb: &RustBox, t: &str, x: usize, y: usize, width: usize) {
-    rb.print(x+1+(width - t.len())/2, y+1, rustbox::RB_BOLD, Color::White, Color::Black, t);
+fn text_dbox(rb: &RustBox, t: &str, style: rustbox::Style, color: rustbox::Color,
+             x: usize, y: usize, width: usize) {
+    rb.print(x+1+(width - t.len())/2, y+1, style, color, Color::Black, t);
     draw_dbox(rb, x, y, width, 2);
 }
 
-fn text_dbox_below(rb: &RustBox, t: &str, x: usize, y: usize, width: usize) {
-    rb.print(x+1+(width - t.len())/2, y+1, rustbox::RB_BOLD, Color::White, Color::Black, t);
+fn text_dbox_below(rb: &RustBox, t: &str, style: rustbox::Style, color: rustbox::Color,
+                   x: usize, y: usize, width: usize) {
+    rb.print(x+1+(width - t.len())/2, y+1, style, color, Color::Black, t);
     draw_dbox_below(rb, x, y, width, 2);
 }
 

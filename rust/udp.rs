@@ -59,7 +59,7 @@ pub fn listen(send_period_ms: u64) -> Result<(SyncSender<RawEncryptedMessage>,
     let socket = match UdpSocket::bind(("::", PORT)) {
         Ok(s) => s,
         _ => {
-            println!("Attempting to bind to ipv4...");
+            info!("Attempting to bind to ipv4...");
             match UdpSocket::bind(("0.0.0.0", PORT)) {
                 Ok(s) => s,
                 _ => try!(UdpSocket::bind(("0.0.0.0", 0))) // any port in a storm
@@ -122,11 +122,11 @@ pub fn listen(send_period_ms: u64) -> Result<(SyncSender<RawEncryptedMessage>,
             match send_socket.send_to(&m.data, &m.ip) {
                 Ok(sent) => {
                     if sent != PACKET_LENGTH {
-                        println!("Short message {} sent to {}", sent, m.ip);
+                        info!("Short message {} sent to {}", sent, m.ip);
                     }
                 },
                 Err(e) => {
-                    println!("Error sending to {}: {:?}", m.ip, e);
+                    error!("Error sending to {}: {:?}", m.ip, e);
                 }
             }
         }
@@ -146,11 +146,11 @@ pub fn listen(send_period_ms: u64) -> Result<(SyncSender<RawEncryptedMessage>,
                 if let Err(e) = tr.send(RawEncryptedMessage{ ip: normalize(src), data: buf }) {
                     // When no one is listending for messages, we may
                     // as well shut down our listener.
-                    println!("Quitting now because {:?}", e);
+                    error!("Quitting now because {:?}", e);
                     return;
                 }
             } else {
-                println!("A packet of a strange size {}", amt);
+                info!("A packet of a strange size {}", amt);
             }
         }
     });
@@ -178,7 +178,7 @@ pub fn now_ms() -> u64 {
 pub fn sleep_until(ms_from_epoch: u64) -> bool {
     let ms = now_ms();
     if ms > ms_from_epoch {
-        println!("I am behind by {} seconds", (ms - ms_from_epoch) as f64 / 1000.0);
+        info!("I am behind by {} seconds", (ms - ms_from_epoch) as f64 / 1000.0);
         return false;
     }
     std::thread::sleep_ms((ms_from_epoch - ms) as u32);
