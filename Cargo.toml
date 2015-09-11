@@ -11,15 +11,16 @@ path = "rust/bin/relay.rs"
 
 
 [[bin]]
-name = "pmail"
-path = "rust/bin/pmail.rs"
-
+name = "textmode-pmail"
+path = "rust/bin/textmode-pmail.rs"
 
 [lib]
 name = "pmail"
 path = "rust/lib.rs"
 
 [dependencies]
+rustbox = "0.7"
+
 onionsalt = { version = "*", git = "https://github.com/droundy/onionsalt" }
 arrayref = "0.3.0"
 

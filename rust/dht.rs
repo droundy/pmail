@@ -28,7 +28,7 @@ fn key_distance(a: &crypto::PublicKey, b: &crypto::PublicKey) -> u64 {
     out
 }
 
-trait MyBytes<T> {
+pub trait MyBytes<T> {
     fn bytes(&self, &mut T);
     fn from_bytes(&T) -> Self;
 }
@@ -293,6 +293,16 @@ pub fn gethostname() -> Result<String, Error> {
         Some(hn) => Ok(String::from(hn)),
         None => Err(Error::new(std::io::ErrorKind::Other, "malformed /etc/hostname")),
     }
+}
+
+pub fn pmail_dir() -> Result<std::path::PathBuf, Error> {
+    let mut name = match std::env::home_dir() {
+        Some(hd) => hd,
+        None => std::path::PathBuf::from("."),
+    };
+    name.push(".pmail");
+    try!(std::fs::create_dir_all(&name));
+    Ok(name)
 }
 
 pub fn read_or_generate_keypair(name: std::path::PathBuf)
@@ -717,16 +727,13 @@ pub fn start_static_node() -> Result<(SyncSender<crypto::PublicKey>,
                                       Sender<[u8; PAYLOAD_LENGTH]>,
                                       Receiver<UserMessage>), Error> {
     let my_key = {
-        let mut name = match std::env::home_dir() {
-            Some(hd) => hd,
-            None => std::path::PathBuf::from("."),
-        };
+        let mut name = try!(pmail_dir());
         match gethostname() {
             Err(_) => {
-                name.push(".pmail.key");
+                name.push("routing.key");
             },
             Ok(hostname) => {
-                name.push(format!(".pmail-{}.key", hostname));
+                name.push(format!("routing-{}.key", hostname));
             },
         };
         read_or_generate_keypair(name).unwrap()
@@ -762,8 +769,8 @@ pub fn start_static_node() -> Result<(SyncSender<crypto::PublicKey>,
         });
     }
 
-    let (sender1, receiver1) = channel(); // for sending messages
-    let (sender2, receiver2) = channel(); // for receiving messages
+    let (sender1, receiver1) = channel(); // for sending messages from this node
+    let (sender2, receiver2) = channel(); // for delivering messages to this node
 
     let (send_rendevous_query, receive_rendevous_query) = sync_channel(0); // asking for
     let (send_rendevous_location, receive_rendevous_location) = sync_channel(0); // asking for
