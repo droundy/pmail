@@ -597,7 +597,7 @@ impl DHT {
         while route[recipient].key == self.my_key.public {
             recipient = self.random_usize() % route.len();
         }
-        info!("\nSending a nice greeting loop of length {}", route.len());
+        info!("Sending a nice greeting loop of length {}", route.len());
         let mut keys_and_routes = Vec::new();
         let mut delay_time = 0;
         let mut who_relayed = [self.my_key.public; ROUTE_COUNT];
@@ -637,7 +637,7 @@ impl DHT {
         while route[recipient].key == self.my_key.public {
             recipient = self.random_usize() % route.len();
         }
-        info!("\nSending a nice message loop of length {}", route.len());
+        info!("Sending a nice message loop of length {}", route.len());
         let mut keys_and_routes = Vec::new();
         let mut delay_time = 0;
         let mut who_relayed = [self.my_key.public; ROUTE_COUNT];
@@ -841,7 +841,7 @@ pub fn start_static_node() -> Result<(SyncSender<crypto::PublicKey>,
                                             let gift = dht.with_lock(|dht|{dht.construct_gift()});
                                             Message::Response(gift).bytes(&mut response);
                                             oob.respond(&my_key, &response);
-                                            info!("\nRelaying {} {} -> {} {}",
+                                            info!("Relaying {} {} -> {} {}",
                                                      codename(&packet.data), packet.ip,
                                                      codename(&oob.packet()), routing.ip);
                                             dht.with_lock(|dht|{dht.schedule(routing.eta,
@@ -852,11 +852,11 @@ pub fn start_static_node() -> Result<(SyncSender<crypto::PublicKey>,
                                         },
                                         Message::PickUp { destination, gifts } => {
                                             if destination != oob.key() {
-                                                info!("\nInvalid pickup request: {}",
+                                                info!("Invalid pickup request: {}",
                                                       codename(&packet.data));
                                                 continue;
                                             }
-                                            info!("\nPickup request: {}", codename(&packet.data));
+                                            info!("Pickup request: {}", codename(&packet.data));
                                             let mut dht = dht.lock().unwrap();
                                             dht.accept_gift(&gifts);
                                             let ready_to_pickup = dht.to_pickup.contains_key(&destination);
@@ -864,7 +864,7 @@ pub fn start_static_node() -> Result<(SyncSender<crypto::PublicKey>,
                                                 let mut buffer = [0;544];
                                                 dht.to_pickup[&destination].bytes(&mut buffer);
                                                 oob.respond(&my_key, &buffer);
-                                                info!("\nForwarding {} {} -> {} {}",
+                                                info!("Forwarding {} {} -> {} {}",
                                                       codename(&destination.0), codename(&buffer),
                                                       codename(&oob.packet()), routing.ip);
                                                 dht.schedule(routing.eta,
@@ -873,7 +873,7 @@ pub fn start_static_node() -> Result<(SyncSender<crypto::PublicKey>,
                                                                  data: oob.packet(),
                                                              });
                                             } else {
-                                                info!("\nEventually I will deliver {} to {} {}",
+                                                info!("Eventually I will deliver {} to {} {}",
                                                       codename(&destination.0),
                                                       codename(&oob.packet()), routing.ip);
                                                 dht.to_forward.insert(destination, oob);
@@ -881,7 +881,7 @@ pub fn start_static_node() -> Result<(SyncSender<crypto::PublicKey>,
                                             dht.to_pickup.remove(&destination);
                                         },
                                         Message::ForwardPlease { destination, message } => {
-                                            info!("\nForward request: {}", codename(&packet.data));
+                                            info!("Forward request: {}", codename(&packet.data));
                                             let mut dht = dht.lock().unwrap();
                                             let ready_to_forward = dht.to_forward.contains_key(&destination);
                                             if ready_to_forward {
@@ -892,7 +892,7 @@ pub fn start_static_node() -> Result<(SyncSender<crypto::PublicKey>,
                                                     let ref mut foob = dht.to_forward.get_mut(&destination).unwrap();
                                                     foob.respond(&my_key, &buffer);
                                                     let routing = RoutingInfo::from_bytes(&foob.routing());
-                                                    info!("\nForwarding {} {} -> {} {}",
+                                                    info!("Forwarding {} {} -> {} {}",
                                                              codename(&destination.0), codename(&buffer),
                                                              codename(&foob.packet()),
                                                              routing.ip);
@@ -905,7 +905,7 @@ pub fn start_static_node() -> Result<(SyncSender<crypto::PublicKey>,
                                                              });
                                                 dht.to_forward.remove(&destination);
                                             } else {
-                                                info!("\nNot ready for {} to pick up",
+                                                info!("Not ready for {} to pick up",
                                                       codename(&destination.0));
                                             }
                                         },
@@ -918,7 +918,7 @@ pub fn start_static_node() -> Result<(SyncSender<crypto::PublicKey>,
                         }
                     } else {
                         // This is a packet that we should relay along.
-                        info!("\nRelaying {} {} -> {} {}",
+                        info!("Relaying {} {} -> {} {}",
                               codename(&packet.data), packet.ip,
                               codename(&oob.packet()), routing.ip);
                         dht.with_lock(|dht|{dht.schedule(routing.eta, &udp::RawEncryptedMessage{
@@ -951,7 +951,7 @@ pub fn start_static_node() -> Result<(SyncSender<crypto::PublicKey>,
                     match maybe_msg {
                         None => (),
                         Some((_,Message::Greetings(_))) => {
-                            info!("\nGreetings not a valid response: {}",
+                            info!("Greetings not a valid response: {}",
                                   codename(&packet.data));
                         },
                         Some((sm,Message::Response(rgs))) => {
@@ -967,7 +967,7 @@ pub fn start_static_node() -> Result<(SyncSender<crypto::PublicKey>,
                                 }
                             }
                             if REPORT_WHOAMIS || sm.who_relayed[1] != my_key.public {
-                                info!("\nResponse received: {}", codename(&packet.data));
+                                info!("Response received: {}", codename(&packet.data));
                             }
                             dht.with_lock(|dht|{dht.print("routing worked")});
                             if rgs[0].key == my_key.public {
@@ -979,11 +979,11 @@ pub fn start_static_node() -> Result<(SyncSender<crypto::PublicKey>,
                             }
                         },
                         Some((_,Message::PickUp { destination, .. })) => {
-                            info!("\nInvalid pickup request for {}: {}",
+                            info!("Invalid pickup request for {}: {}",
                                   codename(&destination.0), codename(&packet.data));
                         },
                         Some((_,Message::ForwardPlease { destination, message})) => {
-                            info!("\nForward request: {} for {}",
+                            info!("Forward request: {} for {}",
                                   codename(&packet.data), codename(&destination.0));
                             sender2.send(UserMessage {
                                 destination: destination,
