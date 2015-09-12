@@ -116,6 +116,27 @@ fn show_finduser(rb: &RustBox, logdata: &mut LogData, query: &str, offset: usize
     draw_box(rb, offset, 0, right-offset-1, bottom);
     text_box_below(rb, query, offset, bottom, right-offset-1);
 }
+fn show_messages(rb: &RustBox, logdata: &mut LogData, composing: &str, offset: usize) {
+    while let Ok(s) = logdata.r.try_recv() {
+        logdata.messages.push(s);
+    }
+    let right = rb.width();
+    let bottom = rb.height() - 3;
+    if logdata.messages.len() > bottom - 1 {
+        let start = logdata.messages.len() - (bottom - 1);
+        for i in 0 .. bottom-1 {
+            rb.print(offset+1, 1 + i,
+                     rustbox::RB_NORMAL, Color::White, Color::Black, &logdata.messages[start+i]);
+        }
+    } else {
+        for i in 0 .. logdata.messages.len() {
+            rb.print(offset+1, 1 + i,
+                     rustbox::RB_NORMAL, Color::White, Color::Black, &logdata.messages[i]);
+        }
+    }
+    draw_box(rb, offset, 0, right-offset-1, bottom);
+    text_box_below(rb, composing, offset, bottom, right-offset-1);
+}
 fn show_addressbook(rb: &RustBox, ab: &AddressBook, us: UserState) -> usize {
     rb.clear();
     let names = ab.list_public_keys();
@@ -129,7 +150,7 @@ fn show_addressbook(rb: &RustBox, ab: &AddressBook, us: UserState) -> usize {
     let mkbold = |b| { if b { rustbox::RB_BOLD } else { rustbox::RB_NORMAL } };
     text_dbox(rb, "Quit [q]", mkbold(false), Color::White, 0, 0, width);
     text_dbox_below(rb, "Show logs [l]", mkbold(us == UserState::Logs), Color::White, 0, 2, width);
-    text_dbox_below(rb, "Show messages [m]", mkbold(us == UserState::Messages), Color::White, 0, 4, width);
+    text_dbox_below(rb, "Show messages [p]", mkbold(us == UserState::Messages), Color::White, 0, 4, width);
     text_dbox_below(rb, "Find user [u]", mkbold(us == UserState::FindUser), Color::White, 0, 6, width);
     text_boxes(rb, &names, 0, 9, width);
     width
@@ -177,6 +198,8 @@ fn main() {
 
     let mut us = UserState::Logs;
     let mut finduser_query = String::new();
+    let mut message_tosend = String::new();
+    let mut dummy = String::new();
     loop {
         match us {
             UserState::Logs => {
@@ -185,7 +208,7 @@ fn main() {
             },
             UserState::Messages => {
                 let width = show_addressbook(&rustbox, &addressbook, us);
-                show_logs(&rustbox, &mut logdata, width+1);
+                show_messages(&rustbox, &mut logdata, &message_tosend, width+1);
             },
             UserState::FindUser => {
                 let width = show_addressbook(&rustbox, &addressbook, us);
@@ -195,23 +218,20 @@ fn main() {
         rustbox.present();
         match rustbox.peek_event(time::Duration::milliseconds(500), false) {
             Ok(rustbox::Event::KeyEvent(key)) => {
+                let editing = match us {
+                    UserState::Logs => { &mut dummy }
+                    UserState::FindUser => { &mut finduser_query }
+                    UserState::Messages => { &mut message_tosend }
+                };
                 match key {
                     Some(Key::Ctrl('q')) => { break; }
                     Some(Key::Esc) => { break; }
                     Some(Key::Ctrl('l')) => { us = UserState::Logs; }
                     Some(Key::Ctrl('p')) => { us = UserState::Messages; }
                     Some(Key::Ctrl('u')) => { us = UserState::FindUser; }
-                    Some(Key::Char(c)) => {
-                        match us {
-                            UserState::Logs => { }
-                            UserState::FindUser => { finduser_query.push(c); }
-                            UserState::Messages => { finduser_query.push(c); }
-                        }
-                    }
-                    Some(Key::Enter) => {
-                        finduser_query = String::new();
-                    }
-                    Some(Key::Backspace) => { finduser_query.pop(); }
+                    Some(Key::Char(c)) => { editing.push(c); }
+                    Some(Key::Enter) => { *editing = String::new(); }
+                    Some(Key::Backspace) => { editing.pop(); }
                     _ => { }
                 }
             },
