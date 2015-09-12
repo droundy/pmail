@@ -70,7 +70,7 @@ impl log::Log for LogChan {
 
     fn log(&self, record: &log::LogRecord) {
         if self.enabled(record.metadata()) {
-            self.0.lock().unwrap().send(format!("{}", record.args()));
+            self.0.lock().unwrap().send(format!("{}", record.args())).unwrap();
         }
     }
 }
@@ -162,7 +162,7 @@ fn main() {
         log::set_logger(move|max_log_level| {
             max_log_level.set(log::LogLevelFilter::Info);
             Box::new(LogChan(Mutex::new(s)))
-        });
+        }).unwrap();
         LogData {
             messages: Vec::new(),
             r: r,
@@ -190,11 +190,15 @@ fn main() {
         println!("All done!");
     }
 
-
+    println!("Initializing rustbox.");
     let rustbox = match RustBox::init(Default::default()) {
         Result::Ok(v) => v,
-        Result::Err(e) => panic!("{}", e),
+        Result::Err(e) => {
+            println!("Unable to initialize rustbox!!! :(");
+            panic!("Unable to initialize rustbox: {}", e)
+        },
     };
+    println!("Finished nitializing rustbox.");
 
     let mut us = UserState::Logs;
     let mut finduser_query = String::new();
