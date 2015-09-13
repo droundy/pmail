@@ -772,14 +772,14 @@ pub fn start_static_node() -> Result<(SyncSender<crypto::PublicKey>,
     let (sender1, receiver1) = channel(); // for sending messages from this node
     let (sender2, receiver2) = channel(); // for delivering messages to this node
 
-    let (send_rendevous_query, receive_rendevous_query) = sync_channel(0); // asking for
-    let (send_rendevous_location, receive_rendevous_location) = sync_channel(0); // asking for
+    let (send_rendezvous_query, receive_rendezvous_query) = sync_channel(0); // asking for
+    let (send_rendezvous_location, receive_rendezvous_location) = sync_channel(0); // asking for
 
     {
-        // a separate copy for locating rendevous nodes
+        // a separate copy for locating rendezvous nodes
         let dht = dht.clone();
         std::thread::spawn(move|| {
-            for recipient in receive_rendevous_query.iter() {
+            for recipient in receive_rendezvous_query.iter() {
                 let dht = dht.lock().unwrap();
                 let mut best = bingley().key;
                 let mut best_distance = key_distance(&best, &recipient);
@@ -790,7 +790,7 @@ pub fn start_static_node() -> Result<(SyncSender<crypto::PublicKey>,
                         best = *k;
                     }
                 }
-                send_rendevous_location.send(best).unwrap();
+                send_rendezvous_location.send(best).unwrap();
             }
         });
     }
@@ -995,7 +995,7 @@ pub fn start_static_node() -> Result<(SyncSender<crypto::PublicKey>,
             }
         }
     });
-    Ok((send_rendevous_query, receive_rendevous_location, sender1, receiver2))
+    Ok((send_rendezvous_query, receive_rendezvous_location, sender1, receiver2))
 }
 
 pub struct UserMessage {

@@ -178,14 +178,14 @@ fn main() {
     addressbook.assert_secret_id("myself", &my_personal_key.public);
 
     println!("Pmail starting! {:?}", my_personal_key.public);
-    let (ask_rendevous, hear_rendevous, _send, receive) = dht::start_static_node().unwrap();
+    let (ask_rendezvous, hear_rendezvous, _send, receive) = dht::start_static_node().unwrap();
     if false {
         for r in receive.iter() {
             println!("received {:?}", r);
 
-            ask_rendevous.send(my_personal_key.public).unwrap();
-            let rendevous_point = hear_rendevous.recv().unwrap();
-            println!("Rendezvous point {:?}", rendevous_point);
+            ask_rendezvous.send(my_personal_key.public).unwrap();
+            let rendezvous_point = hear_rendezvous.recv().unwrap();
+            println!("Rendezvous point {:?}", rendezvous_point);
         }
         println!("All done!");
     }
