@@ -319,8 +319,10 @@ fn text_box_below(rb: &RustBox, t: &str, x: usize, y: usize, width: usize) {
 }
 
 fn text_boxes(rb: &RustBox, names: &[&String], x: usize, y: usize, width: usize) {
-    text_box(rb, names[0], x, y, width);
-    for i in 1 .. names.len() {
-        text_box_below(rb, names[i], x, y+2*i, width);
+    if names.len() > 0 {
+        text_box(rb, names[0], x, y, width);
+        for i in 1 .. names.len() {
+            text_box_below(rb, names[i], x, y+2*i, width);
+        }
     }
 }
