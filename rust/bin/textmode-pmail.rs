@@ -1,6 +1,7 @@
 #[macro_use]
 extern crate arrayref;
 
+#[macro_use]
 extern crate log;
 extern crate time;
 
@@ -114,7 +115,7 @@ fn show_finduser(rb: &RustBox, logdata: &mut LogData, query: &str, offset: usize
         }
     }
     draw_box(rb, offset, 0, right-offset-1, bottom);
-    text_box_below(rb, query, offset, bottom, right-offset-1);
+    text_box_below(rb, query, rustbox::RB_NORMAL, Color::White, offset, bottom, right-offset-1);
 }
 fn show_messages(rb: &RustBox, logdata: &mut LogData, composing: &str, offset: usize) {
     while let Ok(s) = logdata.r.try_recv() {
@@ -135,11 +136,23 @@ fn show_messages(rb: &RustBox, logdata: &mut LogData, composing: &str, offset: u
         }
     }
     draw_box(rb, offset, 0, right-offset-1, bottom);
-    text_box_below(rb, composing, offset, bottom, right-offset-1);
+    text_box_below(rb, composing, rustbox::RB_NORMAL, Color::White, offset, bottom, right-offset-1);
 }
-fn show_addressbook(rb: &RustBox, ab: &AddressBook, us: UserState) -> usize {
+fn which_user_selected(ab: &AddressBook, selected: usize) -> String {
+    let names = ab.list_public_keys();
+    let secret_names = ab.list_secret_keys();
+    if selected < names.len() {
+        return names[selected].clone();
+    }
+    if selected < names.len() + secret_names.len() {
+        return secret_names[selected - names.len()].clone();
+    }
+    secret_names[secret_names.len()-1].clone()
+}
+fn show_addressbook(rb: &RustBox, ab: &AddressBook, us: UserState, selected: usize) -> usize {
     rb.clear();
     let names = ab.list_public_keys();
+    let secret_names = ab.list_secret_keys();
     let mut width = "Show messages [p]".len();
     for n in names.iter() {
         if n.len() > width {
@@ -152,7 +165,16 @@ fn show_addressbook(rb: &RustBox, ab: &AddressBook, us: UserState) -> usize {
     text_dbox_below(rb, "Show logs [l]", mkbold(us == UserState::Logs), Color::White, 0, 2, width);
     text_dbox_below(rb, "Show messages [p]", mkbold(us == UserState::Messages), Color::White, 0, 4, width);
     text_dbox_below(rb, "Find user [u]", mkbold(us == UserState::FindUser), Color::White, 0, 6, width);
-    text_boxes(rb, &names, 0, 9, width);
+    text_boxes(rb, &names, rustbox::RB_BOLD, Color::White, 0, 9, width);
+    if selected < names.len() {
+        rb.print_char(1, 10 + 2*selected, rustbox::RB_BOLD, Color::Red, Color::Black, '⇒');
+        rb.print_char(width-1, 10 + 2*selected, rustbox::RB_BOLD, Color::Red, Color::Black, '⇐');
+    }
+    text_boxes(rb, &secret_names, rustbox::RB_NORMAL, Color::White, 0, 10+names.len()*2, width);
+    if selected >= names.len() && selected < names.len() + secret_names.len() {
+        rb.print_char(1, 11 + 2*selected, rustbox::RB_BOLD, Color::Red, Color::Black, '⇒');
+        rb.print_char(width-1, 11 + 2*selected, rustbox::RB_BOLD, Color::Red, Color::Black, '⇐');
+    }
     width
 }
 
@@ -169,26 +191,7 @@ fn main() {
         }
     };
 
-    let my_personal_key = {
-        let mut name = dht::pmail_dir().unwrap();
-        name.push("personal.key");
-        dht::read_or_generate_keypair(name).unwrap()
-    };
     let mut addressbook = AddressBook::read().unwrap();
-    addressbook.assert_secret_id("myself", &my_personal_key.public);
-
-    println!("Pmail starting! {:?}", my_personal_key.public);
-    let (ask_rendezvous, hear_rendezvous, _send, receive) = dht::start_static_node().unwrap();
-    if false {
-        for r in receive.iter() {
-            println!("received {:?}", r);
-
-            ask_rendezvous.send(my_personal_key.public).unwrap();
-            let rendezvous_point = hear_rendezvous.recv().unwrap();
-            println!("Rendezvous point {:?}", rendezvous_point);
-        }
-        println!("All done!");
-    }
 
     println!("Initializing rustbox.");
     let rustbox = match RustBox::init(Default::default()) {
@@ -204,18 +207,19 @@ fn main() {
     let mut finduser_query = String::new();
     let mut message_tosend = String::new();
     let mut dummy = String::new();
+    let mut selected_user = 0;
     loop {
         match us {
             UserState::Logs => {
-                let width = show_addressbook(&rustbox, &addressbook, us);
+                let width = show_addressbook(&rustbox, &addressbook, us, selected_user);
                 show_logs(&rustbox, &mut logdata, width+1);
             },
             UserState::Messages => {
-                let width = show_addressbook(&rustbox, &addressbook, us);
+                let width = show_addressbook(&rustbox, &addressbook, us, selected_user);
                 show_messages(&rustbox, &mut logdata, &message_tosend, width+1);
             },
             UserState::FindUser => {
-                let width = show_addressbook(&rustbox, &addressbook, us);
+                let width = show_addressbook(&rustbox, &addressbook, us, selected_user);
                 show_finduser(&rustbox, &mut logdata, &finduser_query, width+1);
             },
         }
@@ -234,8 +238,38 @@ fn main() {
                     Some(Key::Ctrl('p')) => { us = UserState::Messages; }
                     Some(Key::Ctrl('u')) => { us = UserState::FindUser; }
                     Some(Key::Char(c)) => { editing.push(c); }
-                    Some(Key::Enter) => { *editing = String::new(); }
+                    Some(Key::Enter) => {
+                        match us {
+                            UserState::Logs => { info!("Noop"); }
+                            UserState::FindUser => {
+                                if editing.len() == 0 { continue; }
+                                let e = which_user_selected(&addressbook, selected_user);
+                                info!("Finduser \"{}\" from \"{}\"", editing, e);
+                                addressbook.assert_public_equivalence(&e, editing);
+                            }
+                            UserState::Messages => {
+                                info!("Message \"{}\" to \"{}\"",
+                                      editing, which_user_selected(&addressbook, selected_user));
+                            }
+                        }
+                        *editing = String::new();
+                    }
+                    Some(Key::End) => {
+                        match us {
+                            UserState::Logs => { }
+                            UserState::FindUser => {
+                                if editing.len() == 0 { continue; }
+                                let e = which_user_selected(&addressbook, selected_user);
+                                info!("Equating \"{}\" with \"{}\"", editing, e);
+                                addressbook.assert_public_equivalence(&e, editing);
+                            }
+                            UserState::Messages => { }
+                        }
+                        *editing = String::new();
+                    }
                     Some(Key::Backspace) => { editing.pop(); }
+                    Some(Key::Up) => { selected_user = if selected_user == 0 {0} else {selected_user-1}; }
+                    Some(Key::Down) => { selected_user += 1; }
                     _ => { }
                 }
             },
@@ -308,21 +342,24 @@ fn text_dbox_below(rb: &RustBox, t: &str, style: rustbox::Style, color: rustbox:
     draw_dbox_below(rb, x, y, width, 2);
 }
 
-fn text_box(rb: &RustBox, t: &str, x: usize, y: usize, width: usize) {
-    rb.print(x+1+(width - t.len())/2, y+1, rustbox::RB_BOLD, Color::White, Color::Black, t);
+fn text_box(rb: &RustBox, t: &str, style: rustbox::Style, color: rustbox::Color,
+            x: usize, y: usize, width: usize) {
+    rb.print(x+1+(width - t.len())/2, y+1, style, color, Color::Black, t);
     draw_box(rb, x, y, width, 2);
 }
 
-fn text_box_below(rb: &RustBox, t: &str, x: usize, y: usize, width: usize) {
-    rb.print(x+1+(width - t.len())/2, y+1, rustbox::RB_BOLD, Color::White, Color::Black, t);
+fn text_box_below(rb: &RustBox, t: &str, style: rustbox::Style, color: rustbox::Color,
+                  x: usize, y: usize, width: usize) {
+    rb.print(x+1+(width - t.len())/2, y+1, style, color, Color::Black, t);
     draw_box_below(rb, x, y, width, 2);
 }
 
-fn text_boxes(rb: &RustBox, names: &[&String], x: usize, y: usize, width: usize) {
+fn text_boxes(rb: &RustBox, names: &[&String], style: rustbox::Style, color: rustbox::Color,
+              x: usize, y: usize, width: usize) {
     if names.len() > 0 {
-        text_box(rb, names[0], x, y, width);
+        text_box(rb, names[0], style, color, x, y, width);
         for i in 1 .. names.len() {
-            text_box_below(rb, names[i], x, y+2*i, width);
+            text_box_below(rb, names[i], style, color, x, y+2*i, width);
         }
     }
 }

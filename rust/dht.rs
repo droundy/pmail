@@ -150,6 +150,10 @@ pub const NUM_IN_RESPONSE: usize = 10;
 /// be encrypted and authenticated to send to some receiver.
 pub const USER_MESSAGE_LENGTH: usize = 511;
 
+/// The `DECRYPTED_USER_MESSAGE_LENGTH` is the size of actual content
+/// that can be encrypted and authenticated to send to some receiver.
+pub const DECRYPTED_USER_MESSAGE_LENGTH: usize = USER_MESSAGE_LENGTH - (32+16+24+32+32);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RoutingGift {
     pub addr: SocketAddr,
@@ -197,7 +201,6 @@ impl MyBytes<[u8; (18+32)*NUM_IN_RESPONSE]> for [RoutingGift; NUM_IN_RESPONSE] {
          RoutingGift::from_bytes(g8), RoutingGift::from_bytes(g9)]
     }
 }
-
 
 pub enum Message {
     Greetings([RoutingGift; NUM_IN_RESPONSE]),
@@ -249,6 +252,12 @@ impl MyBytes<[u8; PAYLOAD_LENGTH]> for Message {
             _ => unimplemented!(),
         }
     }
+}
+
+pub struct EncryptedMessage {
+    pub destination: crypto::PublicKey,
+    pub rendezvous: crypto::PublicKey,
+    pub contents: [u8; USER_MESSAGE_LENGTH],
 }
 
 
@@ -629,13 +638,20 @@ impl DHT {
               codename(&ob.packet()), codename(&ob.return_magic()));
         (route[0].addr, SentMsg { ob: ob, who_relayed: who_relayed })
     }
-    fn attach_ciphertext(&mut self, ciphertext: [u8;PAYLOAD_LENGTH], total_delay_ms: u64)
+    fn send_ciphertext(&mut self, rendezvous: crypto::PublicKey,
+                       ciphertext: [u8;PAYLOAD_LENGTH], total_delay_ms: u64)
                          -> (SocketAddr, SentMsg) {
-        let route = self.pick_route();
+        let mut route = self.pick_route();
         let mut recipient = self.random_usize() % route.len();
-        // avoid sending greetings to myself!
-        while route[recipient].key == self.my_key.public {
-            recipient = self.random_usize() % route.len();
+        for i in 0 .. route.len() {
+            if route[i].key == rendezvous {
+                recipient = i;
+                break;
+            }
+        }
+        if route[recipient].key != rendezvous {
+            route[recipient].key = rendezvous;
+            route[recipient].addr = self.addresses[&rendezvous];
         }
         info!("Sending a nice message loop of length {}", route.len());
         let mut keys_and_routes = Vec::new();
@@ -724,7 +740,7 @@ impl DHT {
 /// does not change).
 pub fn start_static_node() -> Result<(SyncSender<crypto::PublicKey>,
                                       Receiver<crypto::PublicKey>,
-                                      Sender<[u8; PAYLOAD_LENGTH]>,
+                                      Sender<EncryptedMessage>,
                                       Receiver<UserMessage>), Error> {
     let my_key = {
         let mut name = try!(pmail_dir());
@@ -769,7 +785,8 @@ pub fn start_static_node() -> Result<(SyncSender<crypto::PublicKey>,
         });
     }
 
-    let (sender1, receiver1) = channel(); // for sending messages from this node
+    let (sender1, receiver1): (Sender<EncryptedMessage>,
+                               Receiver<EncryptedMessage>) = channel(); // for sending messages from this node
     let (sender2, receiver2) = channel(); // for delivering messages to this node
 
     let (send_rendezvous_query, receive_rendezvous_query) = sync_channel(0); // asking for
@@ -799,9 +816,14 @@ pub fn start_static_node() -> Result<(SyncSender<crypto::PublicKey>,
         // a separate copy for sending out user messages.
         let dht = dht.clone();
         std::thread::spawn(move|| {
-            for encrypted_payload in receiver1.iter() {
+            for encrypted_message in receiver1.iter() {
                 let mut dht = dht.lock().unwrap();
-                dht.attach_ciphertext(encrypted_payload, 600);
+                let mut p = [0; PAYLOAD_LENGTH];
+                Message::ForwardPlease {
+                    destination: encrypted_message.destination,
+                    message: encrypted_message.contents
+                }.bytes(&mut p);
+                dht.send_ciphertext(encrypted_message.rendezvous, p, 600);
             }
         });
     }

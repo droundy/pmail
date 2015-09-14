@@ -6,6 +6,12 @@
 use onionsalt::crypto;
 use std;
 use std::collections::HashMap;
+use dht;
+use dht::{UserMessage, EncryptedMessage,
+          USER_MESSAGE_LENGTH, DECRYPTED_USER_MESSAGE_LENGTH};
+
+use std::sync::mpsc::{ Receiver, SyncSender,
+                       Sender, };
 
 pub fn read_key(name: &std::path::Path) -> Result<crypto::PublicKey, std::io::Error> {
     use std::io::Read;
@@ -27,6 +33,11 @@ pub struct AddressBook {
     /// These are keys that we do not want to share.  Secret
     /// identities or alter egos, etc.
     secret_ids: HashMap<String, crypto::PublicKey>,
+    myself: crypto::KeyPair,
+    hear_rendezvous: Receiver<crypto::PublicKey>,
+    ask_rendezvous: SyncSender<crypto::PublicKey>,
+    message_sender: Sender<EncryptedMessage>,
+    message_receiver: Receiver<UserMessage>,
 }
 
 impl AddressBook {
@@ -44,15 +55,33 @@ impl AddressBook {
     }
     pub fn assert_secret_id(&mut self, id: &str, k: &crypto::PublicKey) {
         self.secret_ids.insert(id.to_string(), *k);
+        self.public_ids.remove(id);
+    }
+    pub fn assert_public_equivalence(&mut self, id: &str, new_id: &str) {
+        if let Some(k) = self.lookup(id) {
+            self.public_ids.insert(new_id.to_string(), k);
+            self.secret_ids.remove(new_id);
+        }
     }
     pub fn assert_public_id(&mut self, id: &str, k: &crypto::PublicKey) {
         self.public_ids.insert(id.to_string(), *k);
+        self.secret_ids.remove(id);
+    }
+    pub fn remove_id(&mut self, id: &str) {
+        self.secret_ids.remove(id);
+        self.public_ids.remove(id);
     }
     /// Ugh, this function returns an ugly type and should be changed
     /// to return an `Iterator` when I understand how to do this.
     pub fn list_public_keys(&self) -> Vec<&String> {
         use std::iter::FromIterator;
         Vec::from_iter(self.public_ids.keys())
+    }
+    /// Ugh, this function also returns an ugly type and should be changed
+    /// to return an `Iterator` when I understand how to do this.
+    pub fn list_secret_keys(&self) -> Vec<&String> {
+        use std::iter::FromIterator;
+        Vec::from_iter(self.secret_ids.keys())
     }
     fn public_secret_dirs() -> Result<(std::path::PathBuf, std::path::PathBuf), std::io::Error> {
         let mut address_dir = match std::env::home_dir() {
@@ -73,13 +102,52 @@ impl AddressBook {
         try!(std::fs::create_dir_all(&secret_dir));
         Ok((public_dir, secret_dir))
     }
+
+    pub fn rendezvous(&self, k: &crypto::PublicKey) -> crypto::PublicKey {
+        self.ask_rendezvous.send(*k).unwrap();
+        self.hear_rendezvous.recv().unwrap()
+    }
+
+    pub fn send(&self, who: &crypto::PublicKey, msg: &[u8; DECRYPTED_USER_MESSAGE_LENGTH]) {
+        let ren = self.rendezvous(who);
+        let c = double_box(msg, who, &self.myself);
+        self.message_sender.send(EncryptedMessage {
+            destination: *who,
+            rendezvous: ren,
+            contents: c,
+        }).unwrap();
+    }
+
+    pub fn listen(&self) -> Option<(crypto::PublicKey, [u8; DECRYPTED_USER_MESSAGE_LENGTH])> {
+        if let Ok(m) = self.message_receiver.try_recv() {
+            if m.destination != self.myself.public {
+                return None;
+            }
+            double_unbox(&m.message, &self.myself.secret).ok()
+        } else {
+            None
+        }
+    }
+
     pub fn read() -> Result<AddressBook, std::io::Error> {
+        let my_personal_key = {
+            let mut name = dht::pmail_dir().unwrap();
+            name.push("personal.key");
+            dht::read_or_generate_keypair(name).unwrap()
+        };
         let (public_dir, secret_dir) = try!(AddressBook::public_secret_dirs());
+        let (ask_rendezvous, hear_rendezvous, send, receive) = try!(dht::start_static_node());
 
         let mut ab = AddressBook {
             public_ids: HashMap::new(),
             secret_ids: HashMap::new(),
+            myself: my_personal_key,
+            ask_rendezvous: ask_rendezvous,
+            hear_rendezvous: hear_rendezvous,
+            message_sender: send,
+            message_receiver: receive,
         };
+        ab.secret_ids.insert("myself".to_string(), my_personal_key.public);
         for entry in try!(std::fs::read_dir(&secret_dir)) {
             let entry = try!(entry);
             if try!(std::fs::metadata(&entry.path())).is_file() {
@@ -152,4 +220,42 @@ impl Drop for AddressBook {
             println!("Unable to write addressbook.  :(");
         }
     }
+}
+
+pub fn double_box(p: &[u8; DECRYPTED_USER_MESSAGE_LENGTH],
+                  pk: &crypto::PublicKey, my: &crypto::KeyPair) -> [u8; USER_MESSAGE_LENGTH] {
+    let mut pp = [0u8; USER_MESSAGE_LENGTH];
+    let mut c = [0u8; USER_MESSAGE_LENGTH];
+    *array_mut_ref![pp, USER_MESSAGE_LENGTH - DECRYPTED_USER_MESSAGE_LENGTH,
+                    DECRYPTED_USER_MESSAGE_LENGTH] = *p;
+    let n = crypto::random_nonce().unwrap();
+    crypto::box_up(array_mut_ref![pp, 32+16+24+32-16, DECRYPTED_USER_MESSAGE_LENGTH+32],
+                   array_ref![c, 32+16+24+32-16, DECRYPTED_USER_MESSAGE_LENGTH+32],
+                   &n, pk, &my.secret);
+    *array_mut_ref![c,32+16, 24] = n.0;
+    *array_mut_ref![c,32+16+24, 32] = my.public.0;
+    let k = crypto::box_keypair().unwrap();
+    crypto::box_up(array_mut_ref![pp, 16, USER_MESSAGE_LENGTH-16],
+                   array_ref![c, 16, USER_MESSAGE_LENGTH-16],
+                   &crypto::Nonce([0;24]), pk, &k.secret);
+    *array_mut_ref![pp,0,32] = k.public.0;
+    pp
+}
+
+pub fn double_unbox(c: &[u8; USER_MESSAGE_LENGTH], sk: &crypto::SecretKey)
+                    -> Result<(crypto::PublicKey, [u8; DECRYPTED_USER_MESSAGE_LENGTH]), crypto::NaClError> {
+    let mut p = [0u8; USER_MESSAGE_LENGTH];
+    let pk1 = crypto::PublicKey(*array_ref![c, 0, 32]);
+    let mut c = *c;
+    *array_mut_ref![c, 0, 32] = [0;32];
+    try!(crypto::box_open(array_mut_ref![p,16,USER_MESSAGE_LENGTH-16],
+                          array_ref![c,16,USER_MESSAGE_LENGTH-16],
+                          &crypto::Nonce([0;24]), &pk1, sk));
+    let n = crypto::Nonce(*array_mut_ref![c,32+16, 24]);
+    let pk = crypto::PublicKey(*array_mut_ref![c,32+16+24, 32]);
+    try!(crypto::box_open(array_mut_ref![c, 32+16+24+32-16, DECRYPTED_USER_MESSAGE_LENGTH+32],
+                          array_ref![p, 32+16+24+32-16, DECRYPTED_USER_MESSAGE_LENGTH+32],
+                          &n, &pk, sk));
+    let (_, out) = array_refs!(&c, 32+16+24+32+32, 375);
+    Ok((pk, *out))
 }
