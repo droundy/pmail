@@ -359,7 +359,7 @@ fn wentworth() -> RoutingGift {
     RoutingGift { addr: addr, key: key }
 }
 
-fn codename(text: &[u8]) -> String {
+pub fn codename(text: &[u8]) -> String {
     let long_version = false;
     let adjectives = ["good", "happy", "nice", "evil", "sloppy", "slovenly",
                       "powerful", "strong", "flying", "mad", "fast",
@@ -639,7 +639,7 @@ impl DHT {
     }
     fn send_ciphertext(&mut self, rendezvous: crypto::PublicKey,
                        ciphertext: [u8;PAYLOAD_LENGTH], total_delay_ms: u64)
-                         -> (SocketAddr, SentMsg) {
+                       -> (SocketAddr, SentMsg) {
         let mut route = self.pick_route();
         let mut recipient = self.random_usize() % route.len();
         for i in 0 .. route.len() {
@@ -816,9 +816,11 @@ pub fn start_static_node() -> Result<(SyncSender<crypto::PublicKey>,
         let dht = dht.clone();
         std::thread::spawn(move|| {
             for encrypted_message in receiver1.iter() {
-                let mut dht = dht.lock().unwrap();
-                dht.send_ciphertext(encrypted_message.rendezvous,
-                                    encrypted_message.contents, 600);
+                while dht.with_lock(|dht|{dht.addresses.len() <= 2}) {
+                    std::thread::sleep_ms(1000); // wait and hope
+                }
+                dht.with_lock(|dht|{dht.send_ciphertext(encrypted_message.rendezvous,
+                                                        encrypted_message.contents, 600)});
             }
         });
     }
@@ -887,7 +889,8 @@ pub fn start_static_node() -> Result<(SyncSender<crypto::PublicKey>,
                                                       codename(&packet.data));
                                                 continue;
                                             }
-                                            info!("Pickup request: {} for {}", codename(&packet.data),
+                                            info!("   ═══ Pickup request: {} for {} ═══",
+                                                  codename(&packet.data),
                                                   codename(&destination.0));
                                             let mut dht = dht.lock().unwrap();
                                             let ready_to_pickup = dht.to_pickup.contains_key(&destination);

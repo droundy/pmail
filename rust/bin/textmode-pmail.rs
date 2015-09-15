@@ -18,6 +18,8 @@ use rustbox::Key;
 use pmail::pmail::{AddressBook, Message};
 use pmail::str255::{Str255};
 
+use pmail::dht;
+
 struct LogData {
     messages: Vec<String>,
     r: Receiver<String>,
@@ -165,6 +167,7 @@ fn main() {
     let mut message_tosend = String::new();
     let mut dummy = String::new();
     let mut selected_user = 0;
+    let mut count_to_pickup = 0;
     loop {
         match us {
             UserState::Logs => {
@@ -237,6 +240,15 @@ fn main() {
             },
             Err(e) => panic!("{}", e),
             _ => { }
+        }
+        count_to_pickup += 1;
+        if count_to_pickup == 60 { // this is very hokey...
+            addressbook.pickup();
+            count_to_pickup = 0;
+        }
+        if let Some((p,_)) = addressbook.listen() {
+            info!("I heard something fun from {}!",
+                  dht::codename(&p.0));
         }
     }
 }

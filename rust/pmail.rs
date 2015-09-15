@@ -41,6 +41,9 @@ pub enum Message {
         thread: u64,
         subject: [u8; 80],
     },
+    Acknowledge {
+        msg_id: [u8; 16],
+    },
 }
 impl MyBytes<[u8; DECRYPTED_USER_MESSAGE_LENGTH]> for Message {
     fn bytes(&self, out: &mut[u8; DECRYPTED_USER_MESSAGE_LENGTH]) {
@@ -181,6 +184,7 @@ impl AddressBook {
 
     pub fn pickup(&self) {
         let ren = self.rendezvous(&self.myself.public);
+        info!("   ═══ Sending pickup request to {}! ═══", ren);
         let msg = [0; DECRYPTED_USER_MESSAGE_LENGTH];
         let c = my_box(&msg, &ren, &self.myself);
 
