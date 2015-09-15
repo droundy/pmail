@@ -15,48 +15,8 @@ use std::sync::{ Mutex };
 use rustbox::{Color, RustBox};
 use rustbox::Key;
 
-use pmail::dht;
-use pmail::dht::{MyBytes};
-use pmail::pmail::{AddressBook};
-
-pub struct Str255 {
-    pub length: u8,
-    pub content: [u8; 255],
-}
-impl MyBytes<[u8; 256]> for Str255 {
-    fn bytes(&self, out: &mut[u8; 256]) {
-        let (l, c) = mut_array_refs![out,1,255];
-        l[0] = self.length;
-        *c = self.content;
-    }
-    fn from_bytes(inp: &[u8; 256]) -> Str255 {
-        let (l, c) = array_refs![inp,1,255];
-        Str255 {
-            length: l[0],
-            content: *c,
-        }
-    }
-}
-
-pub enum X {
-    UserQuery(Str255),
-    UserResponse(Str255),
-    UserMessage {
-        thread_id: u64,
-        message_id: u64,
-        contents: Str255,
-    },
-}
-impl MyBytes<[u8; 511]> for X {
-    fn bytes(&self, _out: &mut[u8; 511]) {
-        // let (_, _, c) = mut_array_refs![out,1,8,8,255];
-        // *l = self.length;
-        // *c = self.contents;
-    }
-    fn from_bytes(inp: &[u8; 511]) -> X {
-        unimplemented!()
-    }
-}
+use pmail::pmail::{AddressBook, Message};
+use pmail::str255::{Str255};
 
 struct LogData {
     messages: Vec<String>,
@@ -193,15 +153,12 @@ fn main() {
 
     let mut addressbook = AddressBook::read().unwrap();
 
-    println!("Initializing rustbox.");
     let rustbox = match RustBox::init(Default::default()) {
         Result::Ok(v) => v,
         Result::Err(e) => {
-            println!("Unable to initialize rustbox!!! :(");
             panic!("Unable to initialize rustbox: {}", e)
         },
     };
-    println!("Finished nitializing rustbox.");
 
     let mut us = UserState::Logs;
     let mut finduser_query = String::new();
@@ -245,7 +202,12 @@ fn main() {
                                 if editing.len() == 0 { continue; }
                                 let e = which_user_selected(&addressbook, selected_user);
                                 info!("Finduser \"{}\" from \"{}\"", editing, e);
-                                addressbook.assert_public_equivalence(&e, editing);
+                                let m = Message::UserQuery {
+                                    user: Str255::from(editing.as_ref()),
+                                };
+                                if let Some(k) = addressbook.lookup(&e) {
+                                    addressbook.send(&k, &m);
+                                }
                             }
                             UserState::Messages => {
                                 info!("Message \"{}\" to \"{}\"",

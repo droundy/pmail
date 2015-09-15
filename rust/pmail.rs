@@ -8,10 +8,63 @@ use std;
 use std::collections::HashMap;
 use dht;
 use dht::{UserMessage, EncryptedMessage,
+          MyBytes,
           USER_MESSAGE_LENGTH, DECRYPTED_USER_MESSAGE_LENGTH};
+use onionsalt::{PAYLOAD_LENGTH};
 
 use std::sync::mpsc::{ Receiver, SyncSender,
                        Sender, };
+
+use str255::{Str255};
+
+pub enum Message {
+    UserQuery {
+        user: Str255
+    },
+    UserResponse {
+        user: Str255,
+        key: crypto::PublicKey
+    },
+    Message {
+        thread: u64,
+        comment_id: u64,
+        message_length: u32,
+        message_start: u32, // for long messages!
+        contents: [u8; 80],
+    },
+    ThreadRecipients {
+        thread: u64,
+        num_recipients: u8,
+        recipients: [crypto::PublicKey; 9],
+    },
+    ThreadSubject {
+        thread: u64,
+        subject: [u8; 80],
+    },
+}
+impl MyBytes<[u8; DECRYPTED_USER_MESSAGE_LENGTH]> for Message {
+    fn bytes(&self, out: &mut[u8; DECRYPTED_USER_MESSAGE_LENGTH]) {
+        match *self {
+            Message::UserQuery { ref user } => {
+                out[0] = b'q';
+                user.bytes(array_mut_ref![out,1,256]);
+            },
+            _ => {
+                *out = [0; DECRYPTED_USER_MESSAGE_LENGTH];
+            },
+        }
+    }
+    fn from_bytes(inp: &[u8; DECRYPTED_USER_MESSAGE_LENGTH]) -> Message {
+        match inp[0] {
+            b'q' => Message::UserQuery {
+                user: Str255::from_bytes(array_ref![inp,1,256]),
+            },
+            _ => Message::UserQuery {
+                user: Str255 { length: 0, content: [0;255] }
+            }
+        }
+    }
+}
 
 pub fn read_key(name: &std::path::Path) -> Result<crypto::PublicKey, std::io::Error> {
     use std::io::Read;
@@ -108,13 +161,38 @@ impl AddressBook {
         self.hear_rendezvous.recv().unwrap()
     }
 
-    pub fn send(&self, who: &crypto::PublicKey, msg: &[u8; DECRYPTED_USER_MESSAGE_LENGTH]) {
+    pub fn send(&self, who: &crypto::PublicKey, msg: &Message) {
         let ren = self.rendezvous(who);
-        let c = double_box(msg, who, &self.myself);
-        self.message_sender.send(EncryptedMessage {
+        let mut plaintext = [0u8; DECRYPTED_USER_MESSAGE_LENGTH];
+        msg.bytes(&mut plaintext);
+        let c = my_box(&plaintext, who, &self.myself);
+
+        let mut p = [0; PAYLOAD_LENGTH];
+        dht::Message::ForwardPlease {
             destination: *who,
+            message: c,
+        }.bytes(&mut p);
+
+        self.message_sender.send(EncryptedMessage {
             rendezvous: ren,
-            contents: c,
+            contents: p,
+        }).unwrap();
+    }
+
+    pub fn pickup(&self) {
+        let ren = self.rendezvous(&self.myself.public);
+        let msg = [0; DECRYPTED_USER_MESSAGE_LENGTH];
+        let c = my_box(&msg, &ren, &self.myself);
+
+        let mut p = [0; PAYLOAD_LENGTH];
+        dht::Message::PickUp {
+            destination: self.myself.public,
+            message: c,
+        }.bytes(&mut p);
+
+        self.message_sender.send(EncryptedMessage {
+            rendezvous: ren,
+            contents: p,
         }).unwrap();
     }
 
@@ -123,7 +201,7 @@ impl AddressBook {
             if m.destination != self.myself.public {
                 return None;
             }
-            double_unbox(&m.message, &self.myself.secret).ok()
+            my_unbox(&m.message, &self.myself.secret).ok()
         } else {
             None
         }
@@ -222,40 +300,31 @@ impl Drop for AddressBook {
     }
 }
 
-pub fn double_box(p: &[u8; DECRYPTED_USER_MESSAGE_LENGTH],
-                  pk: &crypto::PublicKey, my: &crypto::KeyPair) -> [u8; USER_MESSAGE_LENGTH] {
+pub fn my_box(p: &[u8; DECRYPTED_USER_MESSAGE_LENGTH],
+              pk: &crypto::PublicKey, my: &crypto::KeyPair) -> [u8; USER_MESSAGE_LENGTH] {
     let mut pp = [0u8; USER_MESSAGE_LENGTH];
     let mut c = [0u8; USER_MESSAGE_LENGTH];
     *array_mut_ref![pp, USER_MESSAGE_LENGTH - DECRYPTED_USER_MESSAGE_LENGTH,
                     DECRYPTED_USER_MESSAGE_LENGTH] = *p;
     let n = crypto::random_nonce().unwrap();
-    crypto::box_up(array_mut_ref![pp, 32+16+24+32-16, DECRYPTED_USER_MESSAGE_LENGTH+32],
-                   array_ref![c, 32+16+24+32-16, DECRYPTED_USER_MESSAGE_LENGTH+32],
+    crypto::box_up(array_mut_ref![pp, 24+32-16, DECRYPTED_USER_MESSAGE_LENGTH+32],
+                   array_ref![c, 24+32-16, DECRYPTED_USER_MESSAGE_LENGTH+32],
                    &n, pk, &my.secret);
-    *array_mut_ref![c,32+16, 24] = n.0;
-    *array_mut_ref![c,32+16+24, 32] = my.public.0;
-    let k = crypto::box_keypair().unwrap();
-    crypto::box_up(array_mut_ref![pp, 16, USER_MESSAGE_LENGTH-16],
-                   array_ref![c, 16, USER_MESSAGE_LENGTH-16],
-                   &crypto::Nonce([0;24]), pk, &k.secret);
-    *array_mut_ref![pp,0,32] = k.public.0;
-    pp
+    *array_mut_ref![c,32,24] = n.0;
+    *array_mut_ref![c,0, 32] = my.public.0;
+    c
 }
 
-pub fn double_unbox(c: &[u8; USER_MESSAGE_LENGTH], sk: &crypto::SecretKey)
-                    -> Result<(crypto::PublicKey, [u8; DECRYPTED_USER_MESSAGE_LENGTH]), crypto::NaClError> {
+pub fn my_unbox(c: &[u8; USER_MESSAGE_LENGTH], sk: &crypto::SecretKey)
+                -> Result<(crypto::PublicKey, [u8; DECRYPTED_USER_MESSAGE_LENGTH]), crypto::NaClError> {
     let mut p = [0u8; USER_MESSAGE_LENGTH];
-    let pk1 = crypto::PublicKey(*array_ref![c, 0, 32]);
     let mut c = *c;
-    *array_mut_ref![c, 0, 32] = [0;32];
-    try!(crypto::box_open(array_mut_ref![p,16,USER_MESSAGE_LENGTH-16],
-                          array_ref![c,16,USER_MESSAGE_LENGTH-16],
-                          &crypto::Nonce([0;24]), &pk1, sk));
-    let n = crypto::Nonce(*array_mut_ref![c,32+16, 24]);
-    let pk = crypto::PublicKey(*array_mut_ref![c,32+16+24, 32]);
-    try!(crypto::box_open(array_mut_ref![c, 32+16+24+32-16, DECRYPTED_USER_MESSAGE_LENGTH+32],
-                          array_ref![p, 32+16+24+32-16, DECRYPTED_USER_MESSAGE_LENGTH+32],
+    let pk = crypto::PublicKey(*array_ref![c, 0, 32]);
+    let n = crypto::Nonce(*array_ref![c,32, 24]);
+    *array_mut_ref![c, 0, 32+24] = [0;32+24];
+    try!(crypto::box_open(array_mut_ref![p, 32+24-16, DECRYPTED_USER_MESSAGE_LENGTH+32],
+                          array_ref![c, 32+24-16, DECRYPTED_USER_MESSAGE_LENGTH+32],
                           &n, &pk, sk));
-    let (_, out) = array_refs!(&c, 32+16+24+32+32, 375);
+    let (_, out) = array_refs!(&c, 32+24+16, 439);
     Ok((pk, *out))
 }

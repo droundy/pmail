@@ -152,7 +152,7 @@ pub const USER_MESSAGE_LENGTH: usize = 511;
 
 /// The `DECRYPTED_USER_MESSAGE_LENGTH` is the size of actual content
 /// that can be encrypted and authenticated to send to some receiver.
-pub const DECRYPTED_USER_MESSAGE_LENGTH: usize = USER_MESSAGE_LENGTH - (32+16+24+32+32);
+pub const DECRYPTED_USER_MESSAGE_LENGTH: usize = USER_MESSAGE_LENGTH - (16+24+32);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RoutingGift {
@@ -207,7 +207,7 @@ pub enum Message {
     Response([RoutingGift; NUM_IN_RESPONSE]),
     PickUp {
         destination: crypto::PublicKey,
-        gifts: [RoutingGift; NUM_IN_RESPONSE],
+        message: [u8; USER_MESSAGE_LENGTH],
     },
     ForwardPlease {
         destination: crypto::PublicKey,
@@ -226,10 +226,10 @@ impl MyBytes<[u8; PAYLOAD_LENGTH]> for Message {
                 out[0] = b'r';
                 gifts.bytes(array_mut_ref![out,1,500]);
             },
-            Message::PickUp { destination, gifts } => {
+            Message::PickUp { destination, message } => {
                 out[0] = b'p';
                 destination.bytes(array_mut_ref![out,1,32]);
-                gifts.bytes(array_mut_ref![out,33,500]);
+                *array_mut_ref![out,33,511] = message;
             },
             Message::ForwardPlease { destination, message } => {
                 let (t,d,m) = mut_array_refs![out,1,32,511];
@@ -255,9 +255,8 @@ impl MyBytes<[u8; PAYLOAD_LENGTH]> for Message {
 }
 
 pub struct EncryptedMessage {
-    pub destination: crypto::PublicKey,
     pub rendezvous: crypto::PublicKey,
-    pub contents: [u8; USER_MESSAGE_LENGTH],
+    pub contents: [u8; PAYLOAD_LENGTH],
 }
 
 
@@ -818,12 +817,8 @@ pub fn start_static_node() -> Result<(SyncSender<crypto::PublicKey>,
         std::thread::spawn(move|| {
             for encrypted_message in receiver1.iter() {
                 let mut dht = dht.lock().unwrap();
-                let mut p = [0; PAYLOAD_LENGTH];
-                Message::ForwardPlease {
-                    destination: encrypted_message.destination,
-                    message: encrypted_message.contents
-                }.bytes(&mut p);
-                dht.send_ciphertext(encrypted_message.rendezvous, p, 600);
+                dht.send_ciphertext(encrypted_message.rendezvous,
+                                    encrypted_message.contents, 600);
             }
         });
     }
@@ -872,15 +867,29 @@ pub fn start_static_node() -> Result<(SyncSender<crypto::PublicKey>,
                                                                                  data: oob.packet(),
                                                                              })});
                                         },
-                                        Message::PickUp { destination, gifts } => {
-                                            if destination != oob.key() {
+                                        Message::PickUp { destination, message } => {
+                                            let mut p = [0u8; USER_MESSAGE_LENGTH];
+                                            let mut c = message;
+                                            let pk = crypto::PublicKey(*array_ref![c, 0, 32]);
+                                            if pk != destination {
                                                 info!("Invalid pickup request: {}",
                                                       codename(&packet.data));
                                                 continue;
                                             }
-                                            info!("Pickup request: {}", codename(&packet.data));
+                                            let n = crypto::Nonce(*array_ref![c,32, 24]);
+                                            *array_mut_ref![c, 0, 32+24] = [0;32+24];
+                                            if crypto::box_open(
+                                                array_mut_ref![p, 32+24-16,
+                                                               DECRYPTED_USER_MESSAGE_LENGTH+32],
+                                                array_ref![c, 32+24-16, DECRYPTED_USER_MESSAGE_LENGTH+32],
+                                                &n, &pk, &my_key.secret).is_err() {
+                                                info!("Invalid pickup request: {}",
+                                                      codename(&packet.data));
+                                                continue;
+                                            }
+                                            info!("Pickup request: {} for {}", codename(&packet.data),
+                                                  codename(&destination.0));
                                             let mut dht = dht.lock().unwrap();
-                                            dht.accept_gift(&gifts);
                                             let ready_to_pickup = dht.to_pickup.contains_key(&destination);
                                             if ready_to_pickup {
                                                 let mut buffer = [0;544];

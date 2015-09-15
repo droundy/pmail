@@ -11,6 +11,7 @@ extern crate onionsalt;
 pub mod udp;
 pub mod dht;
 pub mod pmail;
+pub mod str255;
 
 pub use udp::{PACKET_LENGTH};
 
