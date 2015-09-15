@@ -243,7 +243,11 @@ impl MyBytes<[u8; PAYLOAD_LENGTH]> for Message {
         match inp[0] {
             b'g' => Message::Greetings(RoutingGifts::from_bytes(array_ref![inp,1,500])),
             b'r' => Message::Response(RoutingGifts::from_bytes(array_ref![inp,1,500])),
-            b'p' => unimplemented!(),
+            b'p' => {
+                let (_,d,m) = array_refs![inp,1,32,511];
+                let destination = crypto::PublicKey::from_bytes(d);
+                Message::PickUp{ destination: destination, message: *m }
+            },
             b'f' => {
                 let (_,d,m) = array_refs![inp,1,32,511];
                 let destination = crypto::PublicKey::from_bytes(d);
@@ -819,8 +823,17 @@ pub fn start_static_node() -> Result<(SyncSender<crypto::PublicKey>,
                 while dht.with_lock(|dht|{dht.addresses.len() <= 2}) {
                     std::thread::sleep_ms(1000); // wait and hope
                 }
-                dht.with_lock(|dht|{dht.send_ciphertext(encrypted_message.rendezvous,
-                                                        encrypted_message.contents, 600)});
+                dht.with_lock(|dht|{
+                    let (ip,sm) = dht.send_ciphertext(encrypted_message.rendezvous,
+                                                          encrypted_message.contents, 600);
+                    dht.schedule(60, &udp::RawEncryptedMessage{
+                        ip: ip,
+                        data: sm.ob.packet(),
+                    });
+                    // The following allows us to read the response
+                    // when it comes back!
+                    dht.onionboxen.insert(sm.ob.return_magic(), sm);
+                });
             }
         });
     }
@@ -870,12 +883,16 @@ pub fn start_static_node() -> Result<(SyncSender<crypto::PublicKey>,
                                                                              })});
                                         },
                                         Message::PickUp { destination, message } => {
+                                            info!("   ═══ Pickup request!!! ═══ {}",
+                                                  my_key.public);
                                             let mut p = [0u8; USER_MESSAGE_LENGTH];
                                             let mut c = message;
                                             let pk = crypto::PublicKey(*array_ref![c, 0, 32]);
                                             if pk != destination {
                                                 info!("Invalid pickup request: {}",
                                                       codename(&packet.data));
+                                                info!("  E {} size {}", codename(&message),
+                                                      message.len());
                                                 continue;
                                             }
                                             let n = crypto::Nonce(*array_ref![c,32, 24]);
@@ -885,8 +902,12 @@ pub fn start_static_node() -> Result<(SyncSender<crypto::PublicKey>,
                                                                DECRYPTED_USER_MESSAGE_LENGTH+32],
                                                 array_ref![c, 32+24-16, DECRYPTED_USER_MESSAGE_LENGTH+32],
                                                 &n, &pk, &my_key.secret).is_err() {
-                                                info!("Invalid pickup request: {}",
+                                                info!("Secondary bad pickup request: {}",
                                                       codename(&packet.data));
+                                                info!("  E {} size {}",
+                                                      codename(&c), c.len());
+                                                info!("  pk {}", pk);
+                                                info!("  n {}", n);
                                                 continue;
                                             }
                                             info!("   ═══ Pickup request: {} for {} ═══",

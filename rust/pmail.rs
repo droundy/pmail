@@ -187,6 +187,7 @@ impl AddressBook {
         info!("   ═══ Sending pickup request to {}! ═══", ren);
         let msg = [0; DECRYPTED_USER_MESSAGE_LENGTH];
         let c = my_box(&msg, &ren, &self.myself);
+        info!("  E {} size {}", dht::codename(&c), c.len());
 
         let mut p = [0; PAYLOAD_LENGTH];
         dht::Message::PickUp {
@@ -307,16 +308,18 @@ impl Drop for AddressBook {
 pub fn my_box(p: &[u8; DECRYPTED_USER_MESSAGE_LENGTH],
               pk: &crypto::PublicKey, my: &crypto::KeyPair) -> [u8; USER_MESSAGE_LENGTH] {
     let mut pp = [0u8; USER_MESSAGE_LENGTH];
-    let mut c = [0u8; USER_MESSAGE_LENGTH];
+    let c = [0u8; USER_MESSAGE_LENGTH];
     *array_mut_ref![pp, USER_MESSAGE_LENGTH - DECRYPTED_USER_MESSAGE_LENGTH,
                     DECRYPTED_USER_MESSAGE_LENGTH] = *p;
     let n = crypto::random_nonce().unwrap();
     crypto::box_up(array_mut_ref![pp, 24+32-16, DECRYPTED_USER_MESSAGE_LENGTH+32],
                    array_ref![c, 24+32-16, DECRYPTED_USER_MESSAGE_LENGTH+32],
                    &n, pk, &my.secret);
-    *array_mut_ref![c,32,24] = n.0;
-    *array_mut_ref![c,0, 32] = my.public.0;
-    c
+    *array_mut_ref![pp,32,24] = n.0;
+    *array_mut_ref![pp,0, 32] = my.public.0;
+    info!("  -> pk {}", my.public);
+    info!("  -> n {}", n);
+    pp
 }
 
 pub fn my_unbox(c: &[u8; USER_MESSAGE_LENGTH], sk: &crypto::SecretKey)
