@@ -25,12 +25,12 @@ pub enum Message {
         user: Str255,
         key: crypto::PublicKey
     },
-    Message {
+    Comment {
         thread: u64,
         comment_id: u64,
         message_length: u32,
         message_start: u32, // for long messages!
-        contents: [u8; 80],
+        contents: [u8; 414],
     },
     ThreadRecipients {
         thread: u64,
@@ -53,6 +53,11 @@ impl std::fmt::Debug for Message {
             },
             &Message::UserResponse { ref user, ref key } => {
                 f.write_str(&format!("UserResponse({}, {})", user, key))
+            },
+            &Message::Comment { ref thread, ref comment_id, ref message_length,
+                                ref message_start, .. } => {
+                f.write_str(&format!("Comment({}, {}, {}, {}, ...)",
+                                     thread, comment_id, message_length, message_start))
             },
             &Message::Acknowledge { ref msg_id } => {
                 if *msg_id == [0;16] {
@@ -80,6 +85,16 @@ impl MyBytes<[u8; DECRYPTED_USER_MESSAGE_LENGTH]> for Message {
                 user.bytes(u);
                 key.bytes(k);
             },
+            Message::Comment { ref thread, ref comment_id, ref message_length,
+                               ref message_start, ref contents } => {
+                let (z, t, cid, ml, ms, c) = mut_array_refs!(out, 1, 8, 8, 4, 4, 414);
+                z[0] = b'c';
+                thread.bytes(t);
+                comment_id.bytes(cid);
+                message_length.bytes(ml);
+                message_start.bytes(ms);
+                *c = *contents;
+            },
             _ => {
                 *out = [0; DECRYPTED_USER_MESSAGE_LENGTH];
             },
@@ -95,6 +110,16 @@ impl MyBytes<[u8; DECRYPTED_USER_MESSAGE_LENGTH]> for Message {
                 Message::UserResponse {
                     user: Str255::from_bytes(u),
                     key: crypto::PublicKey::from_bytes(k),
+                }
+            },
+            b'c' => {
+                let (_, t, cid, ml, ms, c) = array_refs!(inp, 1, 8, 8, 4, 4, 414);
+                Message::Comment {
+                    thread: u64::from_bytes(t),
+                    comment_id: u64::from_bytes(cid),
+                    message_length: u32::from_bytes(ml),
+                    message_start: u32::from_bytes(ms),
+                    contents: *c,
                 }
             },
             _ => Message::Acknowledge { msg_id: [0;16] }
@@ -148,6 +173,32 @@ impl AddressBook {
                 Some(*k)
             },
             None => None,
+        }
+    }
+    pub fn reverse_lookup(&self, who: &crypto::PublicKey) -> Option<String> {
+        let mut s = String::new();
+        for (v,k) in self.public_ids.iter() {
+            if k == who {
+                if s == "" {
+                    s = s + v;
+                } else {
+                    s = format!("{} a.k.a. {}", s, v);
+                }
+            }
+        }
+        for (v,k) in self.secret_ids.iter() {
+            if k == who {
+                if s == "" {
+                    s = format!("\"{}\"", v);
+                } else {
+                    s = format!("{} a.k.a. \"{}\"", s, v);
+                }
+            }
+        }
+        if s == "" {
+            None
+        } else {
+            Some(s)
         }
     }
     pub fn assert_secret_id(&mut self, id: &str, k: &crypto::PublicKey) {

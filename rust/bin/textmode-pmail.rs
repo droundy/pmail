@@ -78,22 +78,19 @@ fn show_finduser(rb: &RustBox, logdata: &mut LogData, query: &str, offset: usize
     draw_box(rb, offset, 0, right-offset-1, bottom);
     text_box_below(rb, query, rustbox::RB_NORMAL, Color::White, offset, bottom, right-offset-1);
 }
-fn show_messages(rb: &RustBox, logdata: &mut LogData, composing: &str, offset: usize) {
-    while let Ok(s) = logdata.r.try_recv() {
-        logdata.messages.push(s);
-    }
+fn show_messages(rb: &RustBox, msgs: &Vec<String>, composing: &str, offset: usize) {
     let right = rb.width();
     let bottom = rb.height() - 3;
-    if logdata.messages.len() > bottom - 1 {
-        let start = logdata.messages.len() - (bottom - 1);
+    if msgs.len() > bottom - 1 {
+        let start = msgs.len() - (bottom - 1);
         for i in 0 .. bottom-1 {
             rb.print(offset+1, 1 + i,
-                     rustbox::RB_NORMAL, Color::White, Color::Black, &logdata.messages[start+i]);
+                     rustbox::RB_NORMAL, Color::White, Color::Black, &msgs[start+i]);
         }
     } else {
-        for i in 0 .. logdata.messages.len() {
+        for i in 0 .. msgs.len() {
             rb.print(offset+1, 1 + i,
-                     rustbox::RB_NORMAL, Color::White, Color::Black, &logdata.messages[i]);
+                     rustbox::RB_NORMAL, Color::White, Color::Black, &msgs[i]);
         }
     }
     draw_box(rb, offset, 0, right-offset-1, bottom);
@@ -151,6 +148,7 @@ fn main() {
             r: r,
         }
     };
+    let mut nice_comments = Vec::new(); // for now, just store messages here
 
     let mut addressbook = AddressBook::read().unwrap();
 
@@ -175,7 +173,7 @@ fn main() {
             },
             UserState::Messages => {
                 let width = show_addressbook(&rustbox, &addressbook, us, selected_user);
-                show_messages(&rustbox, &mut logdata, &message_tosend, width+1);
+                show_messages(&rustbox, &nice_comments, &message_tosend, width+1);
             },
             UserState::FindUser => {
                 let width = show_addressbook(&rustbox, &addressbook, us, selected_user);
@@ -212,8 +210,25 @@ fn main() {
                                 }
                             }
                             UserState::Messages => {
-                                info!("Message \"{}\" to \"{}\"",
-                                      editing, which_user_selected(&addressbook, selected_user));
+                                if editing.len() == 0 { continue; }
+                                let mess: Str255 = Str255::from(editing.as_ref());
+                                let name = which_user_selected(&addressbook, selected_user);
+                                info!("Message \"{}\" to \"{}\"", editing, name);
+                                let mut c = [0u8; 414];
+                                for i in 0 .. mess.length as usize {
+                                    c[i] = mess.content[i];
+                                }
+                                let m = Message::Comment {
+                                    thread: 0,
+                                    comment_id: 0,
+                                    message_length: editing.len() as u32,
+                                    message_start: 0,
+                                    contents: c,
+                                };
+                                if let Some(k) = addressbook.lookup(&name) {
+                                    addressbook.send(&k, &m);
+                                }
+                                nice_comments.push(format!("me: {}", editing));
                             }
                         }
                         *editing = String::new();
@@ -266,6 +281,21 @@ fn main() {
                     info!("A user response about {}", user);
                     addressbook.assert_secret_id(&user, &key);
                 },
+                Message::Comment { contents, message_length, .. } => {
+                    info!("Got comment from {}", p);
+                    info!("    {}", &std::str::from_utf8(&contents[0 .. message_length as usize]).unwrap());
+                    match addressbook.reverse_lookup(&p) {
+                        Some(user) => {
+                            nice_comments.push(format!("{}: {}",
+                                                       user, &std::str::from_utf8(&contents).unwrap()));
+                        }
+                        None => {
+                            nice_comments.push(format!("{}: {}",
+                                                       dht::codename(&p.0),
+                                                       &std::str::from_utf8(&contents).unwrap()));
+                        }
+                    }
+                }
                 _ => {
                     println!("\r\nI got message {:?}!\r\n", m);
                     info!("I heard something fun from {}!",

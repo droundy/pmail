@@ -100,6 +100,23 @@ pub struct RoutingInfo {
     who_am_i: bool,
 }
 
+impl MyBytes<[u8; 8]> for u64 {
+    fn bytes(&self, out: &mut[u8; 8]) {
+        out[0] = *self as u8;
+        out[1] = (*self >> 8) as u8;
+        out[2] = (*self >> 16) as u8;
+        out[3] = (*self >> 24) as u8;
+        out[4] = (*self >> 32) as u8;
+        out[5] = (*self >> 40) as u8;
+        out[6] = (*self >> 48) as u8;
+        out[7] = (*self >> 56) as u8;
+    }
+    fn from_bytes(inp: &[u8; 8]) -> u64 {
+        inp[0] as u64 + ((inp[1] as u64) << 8) + ((inp[2] as u64) << 16) + ((inp[3] as u64) << 24)
+             + ((inp[4] as u64) << 32) + ((inp[5] as u64) << 40) + ((inp[6] as u64) << 48) + ((inp[7] as u64) << 56)
+    }
+}
+
 impl MyBytes<[u8; 4]> for u32 {
     fn bytes(&self, out: &mut[u8; 4]) {
         out[0] = *self as u8;
@@ -960,8 +977,11 @@ pub fn start_static_node() -> Result<(SyncSender<crypto::PublicKey>,
                                                              });
                                                 dht.to_forward.remove(&destination);
                                             } else {
-                                                info!("Not ready for {} to pick up (i.e. {})",
-                                                      codename(&destination.0), destination);
+                                                info!("Saving message for pick up by {}!", codename(&destination.0));
+                                                dht.to_pickup.insert(destination,
+                                                                     Message::ForwardPlease{
+                                                                         destination: destination,
+                                                                         message: message });
                                             }
                                         },
                                         _ => {
