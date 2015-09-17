@@ -17,7 +17,6 @@ use rustbox::Key;
 
 use pmail::pmail::{AddressBook, Message};
 use pmail::str255::{Str255};
-
 use pmail::dht;
 
 struct LogData {
@@ -242,13 +241,41 @@ fn main() {
             _ => { }
         }
         count_to_pickup += 1;
-        if count_to_pickup == 60 { // this is very hokey...
+        if count_to_pickup == 120 { // this is very hokey...
             addressbook.pickup();
             count_to_pickup = 0;
         }
-        if let Some((p,_)) = addressbook.listen() {
-            info!("I heard something fun from {}!",
-                  dht::codename(&p.0));
+        if let Some((p,m)) = addressbook.listen() {
+            info!("I got personal message {:?}!", m);
+            match m {
+                Message::UserQuery{ user } => {
+                    info!("A query about {}", user);
+                    if let Some(userk) = addressbook.lookup_public(&user) {
+                        info!("Responding with user {} == {}",
+                              user, userk);
+                        let m = Message::UserResponse {
+                            user: user,
+                            key: userk,
+                        };
+                        addressbook.send(&p, &m);
+                    } else {
+                        info!("User {} not known", user);
+                    }
+                },
+                Message::UserResponse{ user, key } => {
+                    info!("A user response about {}", user);
+                    addressbook.assert_secret_id(&user, &key);
+                },
+                _ => {
+                    println!("\r\nI got message {:?}!\r\n", m);
+                    info!("I heard something fun from {}!",
+                          dht::codename(&p.0));
+                    println!("\r\nI heard something fun from {}! i.e. {}\r\n",
+                             dht::codename(&p.0), p);
+                    std::thread::sleep_ms(1000000);
+                    panic!("the end");
+                },
+            }
         }
     }
 }

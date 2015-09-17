@@ -960,8 +960,8 @@ pub fn start_static_node() -> Result<(SyncSender<crypto::PublicKey>,
                                                              });
                                                 dht.to_forward.remove(&destination);
                                             } else {
-                                                info!("Not ready for {} to pick up",
-                                                      codename(&destination.0));
+                                                info!("Not ready for {} to pick up (i.e. {})",
+                                                      codename(&destination.0), destination);
                                             }
                                         },
                                         _ => {

@@ -35,6 +35,35 @@ impl<'a> std::convert::From<&'a str> for Str255 {
     }
 }
 
+impl std::ops::Deref for Str255 {
+    type Target = str;
+    fn deref(&self) -> &str {
+        match std::str::from_utf8(&self.content[0 .. self.length as usize]) {
+            Ok(s) => s,
+            _ => "<invalid>"
+        }
+    }
+}
+
+impl std::fmt::Display for Str255 {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+        match std::str::from_utf8(&self.content[0..self.length as usize]) {
+            Ok(s) => f.write_str(&format!("'{}'", s)),
+            _ => f.write_str("<invalid>")
+        }
+    }
+}
+
+impl std::fmt::Debug for Str255 {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+        match std::str::from_utf8(&self.content[0..self.length as usize]) {
+            Ok(s) => f.write_str(&format!("'{}'", s)),
+            _ => f.write_str("<invalid>")
+        }
+    }
+}
+
+
 #[test]
 fn test_from_string() {
     let s = "test".to_string();
