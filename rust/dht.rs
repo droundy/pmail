@@ -1092,7 +1092,66 @@ impl Debug for UserMessage {
     }
 }
 
+const NEW_LENGTH: usize = USER_MESSAGE_LENGTH - 96;
+
+pub fn double_box(p: &[u8; NEW_LENGTH],
+                  pk: &crypto::PublicKey, my: &crypto::KeyPair) -> [u8; USER_MESSAGE_LENGTH] {
+    let mut plain = [0u8; USER_MESSAGE_LENGTH];
+    *array_mut_ref![plain, USER_MESSAGE_LENGTH - NEW_LENGTH, NEW_LENGTH] = *p;
+    let k = crypto::box_keypair().unwrap();
+    let n = crypto::Nonce(*array_ref![k.public.0, 0, 24]);
+    let mut first_box = [0u8; USER_MESSAGE_LENGTH];
+    crypto::box_up(array_mut_ref![first_box, 64, NEW_LENGTH+32],
+                   array_ref![plain, 64, NEW_LENGTH+32],
+                   &n, pk, &my.secret);
+    println!("ephemera {}", k.public);
+    println!("nonce {}", n);
+    *array_mut_ref![first_box,48,32] = my.public.0;
+    let mut second_box = [0u8; USER_MESSAGE_LENGTH];
+    crypto::box_up(array_mut_ref![second_box, 16, NEW_LENGTH+80],
+                   array_ref![first_box, 16, NEW_LENGTH+80],
+                   &crypto::Nonce([0;24]), pk, &k.secret);
+    println!("did second box {}", codename(array_ref![second_box, 32, 32]));
+    *array_mut_ref![second_box,0,32] = k.public.0;
+    info!("  -> pk {}", my.public);
+    info!("  -> n {}", n);
+    second_box
+}
+
+pub fn double_unbox(c: &[u8; USER_MESSAGE_LENGTH], sk: &crypto::SecretKey)
+                    -> Result<(crypto::PublicKey, [u8; NEW_LENGTH]), crypto::NaClError> {
+    let mut second_box = *c;
+    let ephemera = crypto::PublicKey(*array_ref![second_box, 0, 32]);
+    *array_mut_ref![second_box, 0, 32] = [0;32];
+    let mut first_box = [0u8; USER_MESSAGE_LENGTH];
+    println!("ephemera {}", ephemera);
+    println!("starting first box_open {}", codename(array_ref![second_box, 32, 32]));
+    try!(crypto::box_open(array_mut_ref![first_box, 16, NEW_LENGTH+80],
+                          array_ref![second_box, 16, NEW_LENGTH+80],
+                          &crypto::Nonce([0;24]), &ephemera, sk));
+    let n = crypto::Nonce(*array_ref![ephemera.0, 0, 24]);
+    let pk = crypto::PublicKey(*array_ref![first_box,48,32]);
+    let mut plain = [0u8; USER_MESSAGE_LENGTH];
+    println!("starting second box_open nonce {} pk {}", n, pk);
+    try!(crypto::box_open(array_mut_ref![plain, 64, NEW_LENGTH+32],
+                          array_ref![first_box, 64, NEW_LENGTH+32],
+                          &n, &pk, sk));
+    let (_, out) = array_refs!(&plain, 64+32, 415);
+    Ok((pk, *out))
+}
+
 #[test]
-fn test_user() {
-    
+fn test_double_box() {
+    let mut stupid = [0; NEW_LENGTH];
+    stupid[5] = 3;
+    let k1 = crypto::box_keypair().unwrap();
+    let k2 = crypto::box_keypair().unwrap();
+    println!("Starting double_box");
+    let o = double_box(&stupid, &k2.public, &k1);
+    println!("Starting double_unbox");
+    let (p,silly) = double_unbox(&o, &k2.secret).unwrap();
+    println!("Testing results");
+    assert_eq!(p, k1.public);
+    assert_eq!(silly[0], stupid[0]);
+    assert_eq!(silly[5], stupid[5]);
 }
