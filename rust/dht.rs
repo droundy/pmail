@@ -1154,4 +1154,5 @@ fn test_double_box() {
     assert_eq!(p, k1.public);
     assert_eq!(silly[0], stupid[0]);
     assert_eq!(silly[5], stupid[5]);
+    assert_eq!(silly[NEW_LENGTH-3], stupid[NEW_LENGTH-3]);
 }
