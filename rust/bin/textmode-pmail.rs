@@ -214,7 +214,7 @@ fn main() {
                                 let mess: Str255 = Str255::from(editing.as_ref());
                                 let name = which_user_selected(&addressbook, selected_user);
                                 info!("Message \"{}\" to \"{}\"", editing, name);
-                                let mut c = [0u8; 414];
+                                let mut c = [0u8; 390];
                                 for i in 0 .. mess.length as usize {
                                     c[i] = mess.content[i];
                                 }

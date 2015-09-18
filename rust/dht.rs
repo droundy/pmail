@@ -169,7 +169,7 @@ pub const USER_MESSAGE_LENGTH: usize = 511;
 
 /// The `DECRYPTED_USER_MESSAGE_LENGTH` is the size of actual content
 /// that can be encrypted and authenticated to send to some receiver.
-pub const DECRYPTED_USER_MESSAGE_LENGTH: usize = USER_MESSAGE_LENGTH - (16+24+32);
+pub const DECRYPTED_USER_MESSAGE_LENGTH: usize = USER_MESSAGE_LENGTH - 96;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RoutingGift {
@@ -900,31 +900,16 @@ pub fn start_static_node() -> Result<(SyncSender<crypto::PublicKey>,
                                                                              })});
                                         },
                                         Message::PickUp { destination, message } => {
-                                            info!("   ═══ Pickup request!!! ═══ {}",
-                                                  my_key.public);
-                                            let mut p = [0u8; USER_MESSAGE_LENGTH];
-                                            let mut c = message;
-                                            let pk = crypto::PublicKey(*array_ref![c, 0, 32]);
-                                            if pk != destination {
-                                                info!("Invalid pickup request: {}",
+                                            info!("   ═══ Pickup request!!! ═══ {}", my_key.public);
+                                            if let Ok((pk, _)) = double_unbox(&message, &my_key.secret) {
+                                                if pk != destination {
+                                                    info!("Invalid pickup request: {}",
+                                                          codename(&packet.data));
+                                                    continue;
+                                                }
+                                            } else {
+                                                info!("Bad pickup request: {}",
                                                       codename(&packet.data));
-                                                info!("  E {} size {}", codename(&message),
-                                                      message.len());
-                                                continue;
-                                            }
-                                            let n = crypto::Nonce(*array_ref![c,32, 24]);
-                                            *array_mut_ref![c, 0, 32+24] = [0;32+24];
-                                            if crypto::box_open(
-                                                array_mut_ref![p, 32+24-16,
-                                                               DECRYPTED_USER_MESSAGE_LENGTH+32],
-                                                array_ref![c, 32+24-16, DECRYPTED_USER_MESSAGE_LENGTH+32],
-                                                &n, &pk, &my_key.secret).is_err() {
-                                                info!("Secondary bad pickup request: {}",
-                                                      codename(&packet.data));
-                                                info!("  E {} size {}",
-                                                      codename(&c), c.len());
-                                                info!("  pk {}", pk);
-                                                info!("  n {}", n);
                                                 continue;
                                             }
                                             info!("   ═══ Pickup request: {} for {} ═══",
@@ -1104,17 +1089,12 @@ pub fn double_box(p: &[u8; NEW_LENGTH],
     crypto::box_up(array_mut_ref![first_box, 64, NEW_LENGTH+32],
                    array_ref![plain, 64, NEW_LENGTH+32],
                    &n, pk, &my.secret);
-    println!("ephemera {}", k.public);
-    println!("nonce {}", n);
     *array_mut_ref![first_box,48,32] = my.public.0;
     let mut second_box = [0u8; USER_MESSAGE_LENGTH];
     crypto::box_up(array_mut_ref![second_box, 16, NEW_LENGTH+80],
                    array_ref![first_box, 16, NEW_LENGTH+80],
                    &crypto::Nonce([0;24]), pk, &k.secret);
-    println!("did second box {}", codename(array_ref![second_box, 32, 32]));
     *array_mut_ref![second_box,0,32] = k.public.0;
-    info!("  -> pk {}", my.public);
-    info!("  -> n {}", n);
     second_box
 }
 
@@ -1124,15 +1104,12 @@ pub fn double_unbox(c: &[u8; USER_MESSAGE_LENGTH], sk: &crypto::SecretKey)
     let ephemera = crypto::PublicKey(*array_ref![second_box, 0, 32]);
     *array_mut_ref![second_box, 0, 32] = [0;32];
     let mut first_box = [0u8; USER_MESSAGE_LENGTH];
-    println!("ephemera {}", ephemera);
-    println!("starting first box_open {}", codename(array_ref![second_box, 32, 32]));
     try!(crypto::box_open(array_mut_ref![first_box, 16, NEW_LENGTH+80],
                           array_ref![second_box, 16, NEW_LENGTH+80],
                           &crypto::Nonce([0;24]), &ephemera, sk));
     let n = crypto::Nonce(*array_ref![ephemera.0, 0, 24]);
     let pk = crypto::PublicKey(*array_ref![first_box,48,32]);
     let mut plain = [0u8; USER_MESSAGE_LENGTH];
-    println!("starting second box_open nonce {} pk {}", n, pk);
     try!(crypto::box_open(array_mut_ref![plain, 64, NEW_LENGTH+32],
                           array_ref![first_box, 64, NEW_LENGTH+32],
                           &n, &pk, sk));
