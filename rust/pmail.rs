@@ -26,10 +26,10 @@ pub enum Message {
     },
     Comment {
         thread: u64,
-        comment_id: u64,
+        time: u32,
         message_length: u32,
         message_start: u32, // for long messages!
-        contents: [u8; 390],
+        contents: [u8; 394],
     },
     ThreadRecipients {
         thread: u64,
@@ -41,7 +41,7 @@ pub enum Message {
         subject: [u8; 80],
     },
     Acknowledge {
-        msg_id: [u8; 16],
+        msg_id: crypto::PublicKey,
     },
 }
 impl std::fmt::Debug for Message {
@@ -53,16 +53,16 @@ impl std::fmt::Debug for Message {
             &Message::UserResponse { ref user, ref key } => {
                 f.write_str(&format!("UserResponse({}, {})", user, key))
             },
-            &Message::Comment { ref thread, ref comment_id, ref message_length,
+            &Message::Comment { ref thread, ref time, ref message_length,
                                 ref message_start, .. } => {
                 f.write_str(&format!("Comment({}, {}, {}, {}, ...)",
-                                     thread, comment_id, message_length, message_start))
+                                     thread, time, message_length, message_start))
             },
             &Message::Acknowledge { ref msg_id } => {
-                if *msg_id == [0;16] {
+                if *msg_id == crypto::PublicKey([0;32]) && false {
                     f.write_str(&format!("<invalid Message>"))
                 } else {
-                    f.write_str(&format!("Acknowledge({:?})", msg_id))
+                    f.write_str(&format!("Acknowledge({})", msg_id))
                 }
             },
             _ => {
@@ -84,15 +84,20 @@ impl MyBytes<[u8; DECRYPTED_USER_MESSAGE_LENGTH]> for Message {
                 user.bytes(u);
                 key.bytes(k);
             },
-            Message::Comment { ref thread, ref comment_id, ref message_length,
+            Message::Comment { ref thread, ref time, ref message_length,
                                ref message_start, ref contents } => {
-                let (z, t, cid, ml, ms, c) = mut_array_refs!(out, 1, 8, 8, 4, 4, 390);
+                let (z, t, cid, ml, ms, c) = mut_array_refs!(out, 1, 8, 4, 4, 4, 394);
                 z[0] = b'c';
                 thread.bytes(t);
-                comment_id.bytes(cid);
+                time.bytes(cid);
                 message_length.bytes(ml);
                 message_start.bytes(ms);
                 *c = *contents;
+            },
+            Message::Acknowledge { ref msg_id } => {
+                let (z, id, _) = mut_array_refs!(out, 1, 32, 382);
+                z[0] = b'a';
+                msg_id.bytes(id);
             },
             _ => {
                 *out = [0; DECRYPTED_USER_MESSAGE_LENGTH];
@@ -112,18 +117,65 @@ impl MyBytes<[u8; DECRYPTED_USER_MESSAGE_LENGTH]> for Message {
                 }
             },
             b'c' => {
-                let (_, t, cid, ml, ms, c) = array_refs!(inp, 1, 8, 8, 4, 4, 390);
+                let (_, t, cid, ml, ms, c) = array_refs!(inp, 1, 8, 4, 4, 4, 394);
                 Message::Comment {
                     thread: u64::from_bytes(t),
-                    comment_id: u64::from_bytes(cid),
+                    time: u32::from_bytes(cid),
                     message_length: u32::from_bytes(ml),
                     message_start: u32::from_bytes(ms),
                     contents: *c,
                 }
             },
-            _ => Message::Acknowledge { msg_id: [0;16] }
+            b'a' => {
+                let (_, id, _) = array_refs!(inp, 1, 32, 382);
+                Message::Acknowledge {
+                    msg_id: crypto::PublicKey::from_bytes(id),
+                }
+            },
+            _ => Message::Acknowledge { msg_id: crypto::PublicKey([0;32]) }
         }
     }
+}
+
+#[cfg(test)]
+fn test_message(m: Message) {
+    let mut buf = [0; DECRYPTED_USER_MESSAGE_LENGTH];
+    m.bytes(&mut buf);
+    let newm = Message::from_bytes(&buf);
+    let mut buf2 = [0; DECRYPTED_USER_MESSAGE_LENGTH];
+    newm.bytes(&mut buf2);
+    for i in 0 .. buf.len() {
+        assert_eq!(buf[i], buf2[i]);
+    }
+}
+
+#[test]
+fn query_bytes() {
+    test_message( Message::UserQuery {
+        user: Str255::from("hello"),
+    });
+}
+#[test]
+fn response_bytes() {
+    test_message( Message::UserResponse {
+        user: Str255::from("hello"),
+        key: crypto::PublicKey([0;32]),
+    });
+}
+#[test]
+fn acknowledge_bytes() {
+    let k = crypto::box_keypair().unwrap();
+    test_message( Message::Acknowledge {
+        msg_id: k.public,
+    });
+    let k = crypto::box_keypair().unwrap();
+    test_message( Message::Acknowledge {
+        msg_id: k.public,
+    });
+    let k = crypto::box_keypair().unwrap();
+    test_message( Message::Acknowledge {
+        msg_id: k.public,
+    });
 }
 
 pub fn read_key(name: &std::path::Path) -> Result<crypto::PublicKey, std::io::Error> {
@@ -260,8 +312,8 @@ impl AddressBook {
         let mut plaintext = [0u8; DECRYPTED_USER_MESSAGE_LENGTH];
         msg.bytes(&mut plaintext);
         let c = dht::double_box(&plaintext, who, &self.myself);
-        info!(" ****** \"{}\" ****** {} ******", dht::codename(&c),
-              dht::codename(&c[32+24 .. 32+24+6]));
+        // info!(" ****** \"{}\" ****** {} ******", dht::codename(&c),
+        //       dht::codename(&c[32+24 .. 32+24+6]));
 
         let mut p = [0; PAYLOAD_LENGTH];
         dht::Message::ForwardPlease {
@@ -269,6 +321,7 @@ impl AddressBook {
             message: c,
         }.bytes(&mut p);
 
+        info!("Sent message {}", dht::codename(&c));
         self.message_sender.send(EncryptedMessage {
             rendezvous: ren,
             contents: p,
@@ -277,10 +330,10 @@ impl AddressBook {
 
     pub fn pickup(&self) {
         let ren = self.rendezvous(&self.myself.public);
-        info!("   ═══ Sending pickup request to {}! ═══", ren);
+        // info!("   ═══ Sending pickup request to {}! ═══", ren);
         let msg = [0; DECRYPTED_USER_MESSAGE_LENGTH];
         let c = dht::double_box(&msg, &ren, &self.myself);
-        info!("  E {} size {}", dht::codename(&c), c.len());
+        // info!("  E {} size {}", dht::codename(&c), c.len());
 
         let mut p = [0; PAYLOAD_LENGTH];
         dht::Message::PickUp {
@@ -294,18 +347,19 @@ impl AddressBook {
         }).unwrap();
     }
 
-    pub fn listen(&self) -> Option<(crypto::PublicKey, Message)> {
+    pub fn listen(&self) -> Option<(crypto::PublicKey, crypto::PublicKey, Message)> {
         if let Ok(m) = self.message_receiver.try_recv() {
             if m.destination != self.myself.public {
                 return None;
             }
             if let Ok((k, data)) = dht::double_unbox(&m.message, &self.myself.secret) {
+                let msg_id = crypto::PublicKey(*array_ref![m.message,0,32]);
                 // println!("\r\n ****** \"{}\" ****** {}\r\n", dht::codename(&m.message),
                 //          dht::codename(&m.message[32+24 .. 32+24+6]));
                 // println!("\r\nlisten is decrypted to \"{}\" a.k.a. {:?}\r\n",
                 //          dht::codename(&data), &data[0..7]);
 
-                return Some((k, Message::from_bytes(&data)));
+                return Some((k, msg_id, Message::from_bytes(&data)));
             }
         }
         None

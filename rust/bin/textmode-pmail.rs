@@ -214,13 +214,13 @@ fn main() {
                                 let mess: Str255 = Str255::from(editing.as_ref());
                                 let name = which_user_selected(&addressbook, selected_user);
                                 info!("Message \"{}\" to \"{}\"", editing, name);
-                                let mut c = [0u8; 390];
+                                let mut c = [0u8; 394];
                                 for i in 0 .. mess.length as usize {
                                     c[i] = mess.content[i];
                                 }
                                 let m = Message::Comment {
                                     thread: 0,
-                                    comment_id: 0,
+                                    time: 0,
                                     message_length: editing.len() as u32,
                                     message_start: 0,
                                     contents: c,
@@ -260,7 +260,7 @@ fn main() {
             addressbook.pickup();
             count_to_pickup = 0;
         }
-        if let Some((p,m)) = addressbook.listen() {
+        if let Some((p,msg_id,m)) = addressbook.listen() {
             info!("I got personal message {:?}!", m);
             match m {
                 Message::UserQuery{ user } => {
@@ -295,7 +295,15 @@ fn main() {
                                                        &std::str::from_utf8(&contents).unwrap()));
                         }
                     }
-                }
+                    let ack = Message::Acknowledge {
+                        msg_id: msg_id,
+                    };
+                    info!("Sending acknowledgement to {}!", dht::codename(&p.0));
+                    addressbook.send(&p, &ack);
+                },
+                Message::Acknowledge { msg_id } => {
+                    info!("Acknowledgement of message {}", dht::codename(&msg_id.0));
+                },
                 _ => {
                     println!("\r\nI got message {:?}!\r\n", m);
                     info!("I heard something fun from {}!",
