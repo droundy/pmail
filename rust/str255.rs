@@ -5,6 +5,14 @@ pub struct Str255 {
     pub length: u8,
     pub content: [u8; 255],
 }
+impl Clone for Str255 {
+    fn clone(&self) -> Str255 {
+        Str255 {
+            length: self.length,
+            content: self.content
+        }
+    }
+}
 impl MyBytes<[u8; 256]> for Str255 {
     fn bytes(&self, out: &mut[u8; 256]) {
         let (l, c) = mut_array_refs![out,1,255];

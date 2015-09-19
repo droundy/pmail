@@ -8,7 +8,7 @@ use std;
 use std::collections::HashMap;
 use dht;
 use dht::{UserMessage, EncryptedMessage,
-          MyBytes, DECRYPTED_USER_MESSAGE_LENGTH};
+          MyBytes, DECRYPTED_USER_MESSAGE_LENGTH, USER_MESSAGE_LENGTH};
 use message;
 use onionsalt::{PAYLOAD_LENGTH};
 
@@ -44,6 +44,29 @@ pub enum Message {
     Acknowledge {
         msg_id: message::Id,
     },
+}
+impl Message {
+    fn needs_acknowledgement(&self) -> bool {
+        match *self {
+            Message::Comment {..} | Message::ThreadSubject {..} | Message::ThreadRecipients {..} => true,
+            _ => false,
+        }
+    }
+}
+impl Clone for Message {
+    fn clone(&self) -> Self {
+        use self::Message::*;
+        match *self {
+            UserQuery { ref user } => UserQuery { user: user.clone() },
+            UserResponse {ref user, key} => UserResponse {user: user.clone(), key: key},
+            Comment {thread,time,message_length,message_start,contents} =>
+                Comment {thread:thread,time:time,message_length:message_length,message_start:message_start,contents:contents},
+            ThreadRecipients {thread,num_recipients,recipients} =>
+                ThreadRecipients {thread:thread,num_recipients:num_recipients,recipients:recipients},
+            ThreadSubject {thread,subject} => ThreadSubject {thread:thread,subject:subject},
+            Acknowledge {msg_id} => Acknowledge {msg_id:msg_id},
+        }
+    }
 }
 impl std::fmt::Debug for Message {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
@@ -202,7 +225,7 @@ pub struct AddressBook {
     /// These are keys that we do not want to share.  Secret
     /// identities or alter egos, etc.
     secret_ids: HashMap<String, crypto::PublicKey>,
-    unacknowledged: HashMap<message::Id, (crypto::PublicKey, Message)>,
+    unacknowledged: HashMap<message::Id, (crypto::PublicKey, [u8;USER_MESSAGE_LENGTH])>,
     myself: crypto::KeyPair,
     hear_rendezvous: Receiver<crypto::PublicKey>,
     ask_rendezvous: SyncSender<crypto::PublicKey>,
@@ -312,28 +335,42 @@ impl AddressBook {
         self.hear_rendezvous.recv().unwrap()
     }
 
-    pub fn send(&self, who: &crypto::PublicKey, msg: &Message) {
-        let ren = self.rendezvous(who);
+    pub fn send(&mut self, who: &crypto::PublicKey, msg: &Message) {
         let mut plaintext = [0u8; DECRYPTED_USER_MESSAGE_LENGTH];
         msg.bytes(&mut plaintext);
-        let (_, c) = dht::double_box(&plaintext, who, &self.myself);
+        let (msg_id, c) = dht::double_box(&plaintext, who, &self.myself);
         // info!(" ****** \"{}\" ****** {} ******", dht::codename(&c),
         //       dht::codename(&c[32+24 .. 32+24+6]));
+
+        self.send_doubleboxed(who, &msg_id, &c);
+
+        if msg.needs_acknowledgement() {
+            self.unacknowledged.insert(msg_id, (*who, c));
+
+            let mut q = String::new();
+            for k in self.unacknowledged.keys() {
+                q = format!("{} '{}'", q, dht::codename(&k.0));
+            }
+            info!("Messages in queue: {}", q);
+        }
+    }
+    pub fn send_doubleboxed(&mut self, who: &crypto::PublicKey, msg_id: &message::Id, c: &[u8;USER_MESSAGE_LENGTH]) {
+        let ren = self.rendezvous(who);
 
         let mut p = [0; PAYLOAD_LENGTH];
         dht::Message::ForwardPlease {
             destination: *who,
-            message: c,
+            message: *c,
         }.bytes(&mut p);
 
-        info!("Sent message {}", dht::codename(&c));
+        info!("Sent message {}", dht::codename(&msg_id.0));
         self.message_sender.send(EncryptedMessage {
             rendezvous: ren,
             contents: p,
         }).unwrap();
     }
 
-    pub fn pickup(&self) {
+    pub fn pickup(&mut self) {
         let ren = self.rendezvous(&self.myself.public);
         // info!("   ═══ Sending pickup request to {}! ═══", ren);
         let msg = [0; DECRYPTED_USER_MESSAGE_LENGTH];
@@ -351,11 +388,23 @@ impl AddressBook {
             contents: p,
         }).unwrap();
 
-        if self.unacknowledged.len() > 0 {
-            info!("I am going to retry...");
-            for v in self.unacknowledged.values() {
-                self.send(&v.0, &v.1);
-                continue;
+        let num_unacknowledged = self.unacknowledged.len();
+        if num_unacknowledged > 0 {
+            // The following is a ridiculous contortion to get around
+            // the borrow checker.  This is one trouble with grouping
+            // several data structures into an object in rust.  A
+            // borrow on any is a borrow on all.  :( To quote the
+            // Fullmetal Alchemist: One is all, and all is one.
+            let somev: Option<(message::Id, crypto::PublicKey, [u8;USER_MESSAGE_LENGTH])> = {
+                let somev = self.unacknowledged.iter().nth(crypto::random_u32() as usize % num_unacknowledged);
+                match somev {
+                    None => None,
+                    Some((a,b)) => Some((a.clone(),b.0.clone(),b.1)),
+                }
+            };
+            if let Some(v) = somev {
+                info!("I am going to retry...");
+                self.send_doubleboxed(&v.1,&v.0,&v.2);
             }
         }
     }
