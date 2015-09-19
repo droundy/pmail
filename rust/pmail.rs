@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use dht;
 use dht::{UserMessage, EncryptedMessage,
           MyBytes, DECRYPTED_USER_MESSAGE_LENGTH};
+use message;
 use onionsalt::{PAYLOAD_LENGTH};
 
 use std::sync::mpsc::{ Receiver, SyncSender,
@@ -41,7 +42,7 @@ pub enum Message {
         subject: [u8; 80],
     },
     Acknowledge {
-        msg_id: crypto::PublicKey,
+        msg_id: message::Id,
     },
 }
 impl std::fmt::Debug for Message {
@@ -59,7 +60,7 @@ impl std::fmt::Debug for Message {
                                      thread, time, message_length, message_start))
             },
             &Message::Acknowledge { ref msg_id } => {
-                if *msg_id == crypto::PublicKey([0;32]) && false {
+                if *msg_id == message::Id([0;32]) && false {
                     f.write_str(&format!("<invalid Message>"))
                 } else {
                     f.write_str(&format!("Acknowledge({})", msg_id))
@@ -129,10 +130,10 @@ impl MyBytes<[u8; DECRYPTED_USER_MESSAGE_LENGTH]> for Message {
             b'a' => {
                 let (_, id, _) = array_refs!(inp, 1, 32, 382);
                 Message::Acknowledge {
-                    msg_id: crypto::PublicKey::from_bytes(id),
+                    msg_id: message::Id::from_bytes(id),
                 }
             },
-            _ => Message::Acknowledge { msg_id: crypto::PublicKey([0;32]) }
+            _ => Message::Acknowledge { msg_id: message::Id([0;32]) }
         }
     }
 }
@@ -164,17 +165,20 @@ fn response_bytes() {
 }
 #[test]
 fn acknowledge_bytes() {
-    let k = crypto::box_keypair().unwrap();
+    let k = crypto::box_keypair();
+    let id = message::Id(k.public.0);
     test_message( Message::Acknowledge {
-        msg_id: k.public,
+        msg_id: id,
     });
-    let k = crypto::box_keypair().unwrap();
+    let k = crypto::box_keypair();
+    let id = message::Id(k.public.0);
     test_message( Message::Acknowledge {
-        msg_id: k.public,
+        msg_id: id,
     });
-    let k = crypto::box_keypair().unwrap();
+    let k = crypto::box_keypair();
+    let id = message::Id(k.public.0);
     test_message( Message::Acknowledge {
-        msg_id: k.public,
+        msg_id: id,
     });
 }
 
@@ -198,6 +202,7 @@ pub struct AddressBook {
     /// These are keys that we do not want to share.  Secret
     /// identities or alter egos, etc.
     secret_ids: HashMap<String, crypto::PublicKey>,
+    unacknowledged: HashMap<message::Id, (crypto::PublicKey, Message)>,
     myself: crypto::KeyPair,
     hear_rendezvous: Receiver<crypto::PublicKey>,
     ask_rendezvous: SyncSender<crypto::PublicKey>,
@@ -311,7 +316,7 @@ impl AddressBook {
         let ren = self.rendezvous(who);
         let mut plaintext = [0u8; DECRYPTED_USER_MESSAGE_LENGTH];
         msg.bytes(&mut plaintext);
-        let c = dht::double_box(&plaintext, who, &self.myself);
+        let (_, c) = dht::double_box(&plaintext, who, &self.myself);
         // info!(" ****** \"{}\" ****** {} ******", dht::codename(&c),
         //       dht::codename(&c[32+24 .. 32+24+6]));
 
@@ -332,7 +337,7 @@ impl AddressBook {
         let ren = self.rendezvous(&self.myself.public);
         // info!("   ═══ Sending pickup request to {}! ═══", ren);
         let msg = [0; DECRYPTED_USER_MESSAGE_LENGTH];
-        let c = dht::double_box(&msg, &ren, &self.myself);
+        let (_, c) = dht::double_box(&msg, &ren, &self.myself);
         // info!("  E {} size {}", dht::codename(&c), c.len());
 
         let mut p = [0; PAYLOAD_LENGTH];
@@ -345,21 +350,37 @@ impl AddressBook {
             rendezvous: ren,
             contents: p,
         }).unwrap();
+
+        if self.unacknowledged.len() > 0 {
+            info!("I am going to retry...");
+            for v in self.unacknowledged.values() {
+                self.send(&v.0, &v.1);
+                continue;
+            }
+        }
     }
 
-    pub fn listen(&self) -> Option<(crypto::PublicKey, crypto::PublicKey, Message)> {
+    pub fn listen(&mut self) -> Option<(crypto::PublicKey, message::Id, Message)> {
         if let Ok(m) = self.message_receiver.try_recv() {
             if m.destination != self.myself.public {
                 return None;
             }
-            if let Ok((k, data)) = dht::double_unbox(&m.message, &self.myself.secret) {
-                let msg_id = crypto::PublicKey(*array_ref![m.message,0,32]);
+            if let Ok((k, msg_id, data)) = dht::double_unbox(&m.message, &self.myself.secret) {
                 // println!("\r\n ****** \"{}\" ****** {}\r\n", dht::codename(&m.message),
                 //          dht::codename(&m.message[32+24 .. 32+24+6]));
                 // println!("\r\nlisten is decrypted to \"{}\" a.k.a. {:?}\r\n",
                 //          dht::codename(&data), &data[0..7]);
 
-                return Some((k, msg_id, Message::from_bytes(&data)));
+                let m = Message::from_bytes(&data);
+                match m {
+                    Message::Acknowledge { msg_id } => {
+                        info!("Acknowledgement of message {}", dht::codename(&msg_id.0));
+                        self.unacknowledged.remove(&msg_id);
+                    },
+                    _ => {},
+                };
+
+                return Some((k, msg_id, m));
             }
         }
         None
@@ -377,6 +398,7 @@ impl AddressBook {
         let mut ab = AddressBook {
             public_ids: HashMap::new(),
             secret_ids: HashMap::new(),
+            unacknowledged: HashMap::new(),
             myself: my_personal_key,
             ask_rendezvous: ask_rendezvous,
             hear_rendezvous: hear_rendezvous,

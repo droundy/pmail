@@ -18,6 +18,8 @@ use std::sync::mpsc::{ Receiver, Sender, channel,
                        SyncSender, sync_channel, };
 use std::sync::{Arc,Mutex};
 
+use message;
+
 const REPORT_WHOAMIS: bool = false;
 
 fn key_distance(a: &crypto::PublicKey, b: &crypto::PublicKey) -> u64 {
@@ -185,6 +187,14 @@ impl MyBytes<[u8; 32]> for crypto::PublicKey {
         crypto::PublicKey(*inp)
     }
 }
+impl MyBytes<[u8; 32]> for message::Id {
+    fn bytes(&self, out: &mut[u8; 32]) {
+        *out = self.0;
+    }
+    fn from_bytes(inp: &[u8; 32]) -> message::Id {
+        message::Id(*inp)
+    }
+}
 
 impl MyBytes<[u8; 18+32]> for RoutingGift {
     fn bytes(&self, out: &mut[u8; 18+32]) {
@@ -342,22 +352,18 @@ pub fn read_or_generate_keypair(name: std::path::PathBuf)
     match read_keypair(name) {
         Ok(kp) => Ok(kp),
         _ => {
-            match crypto::box_keypair() {
-                Err(_) => Err(Error::new(std::io::ErrorKind::Other, "oh bad random!")),
-                Ok(kp) => {
-                    let mut f = try!(std::fs::File::create(name));
-                    let mut data = [0; 64];
-                    *array_mut_ref![data, 0, 32] = kp.public.0;
-                    *array_mut_ref![data, 32, 32] = kp.secret.0;
-                    try!(f.write_all(&data));
-                    info!("Created new key!  [");
-                    for i in 0..32 {
-                        info!("{}, ", kp.public.0[i]);
-                    }
-                    info!("]");
-                    Ok(kp)
-                }
+            let kp = crypto::box_keypair();
+            let mut f = try!(std::fs::File::create(name));
+            let mut data = [0; 64];
+            *array_mut_ref![data, 0, 32] = kp.public.0;
+            *array_mut_ref![data, 32, 32] = kp.secret.0;
+            try!(f.write_all(&data));
+            info!("Created new key!  [");
+            for i in 0..32 {
+                info!("{}, ", kp.public.0[i]);
             }
+            info!("]");
+            Ok(kp)
         }
     }
 }
@@ -538,7 +544,7 @@ impl DHT {
     fn random_u32(&mut self) -> u32 {
         // The following is a really stupid way of getting a random
         // usize so that we will send to a random node each time.
-        let r = crypto::random_nonce().unwrap().0;
+        let r = crypto::random_nonce().0;
         r[0] as u32 + ((r[1] as u32)<<8) + ((r[2] as u32)<<16)
     }
     fn pick_route(&mut self) -> Vec<RoutingGift> {
@@ -901,7 +907,7 @@ pub fn start_static_node() -> Result<(SyncSender<crypto::PublicKey>,
                                         },
                                         Message::PickUp { destination, message } => {
                                             // info!("   ═══ Pickup request!!! ═══ {}", my_key.public);
-                                            if let Ok((pk, _)) = double_unbox(&message, &my_key.secret) {
+                                            if let Ok((pk, _, _)) = double_unbox(&message, &my_key.secret) {
                                                 if pk != destination {
                                                     info!("Invalid pickup request: {}",
                                                           codename(&packet.data));
@@ -1079,27 +1085,30 @@ impl Debug for UserMessage {
 
 const NEW_LENGTH: usize = USER_MESSAGE_LENGTH - 96;
 
-pub fn double_box(p: &[u8; NEW_LENGTH],
-                  pk: &crypto::PublicKey, my: &crypto::KeyPair) -> [u8; USER_MESSAGE_LENGTH] {
+pub fn double_box(p: &[u8; NEW_LENGTH], pk: &crypto::PublicKey, my: &crypto::KeyPair)
+                  -> (message::Id, [u8; USER_MESSAGE_LENGTH]) {
     let mut plain = [0u8; USER_MESSAGE_LENGTH];
     *array_mut_ref![plain, USER_MESSAGE_LENGTH - NEW_LENGTH, NEW_LENGTH] = *p;
-    let k = crypto::box_keypair().unwrap();
+    let k = crypto::box_keypair();
     let n = crypto::Nonce(*array_ref![k.public.0, 0, 24]);
     let mut first_box = [0u8; USER_MESSAGE_LENGTH];
     crypto::box_up(array_mut_ref![first_box, 64, NEW_LENGTH+32],
                    array_ref![plain, 64, NEW_LENGTH+32],
                    &n, pk, &my.secret);
     *array_mut_ref![first_box,48,32] = my.public.0;
+    // The msg_id is the first 32 bytes of ciphertext of the first
+    // box, which includes the 16 authentication bytes.
+    let msg_id = message::Id(*array_ref![first_box,48+32,32]);
     let mut second_box = [0u8; USER_MESSAGE_LENGTH];
     crypto::box_up(array_mut_ref![second_box, 16, NEW_LENGTH+80],
                    array_ref![first_box, 16, NEW_LENGTH+80],
                    &crypto::Nonce([0;24]), pk, &k.secret);
     *array_mut_ref![second_box,0,32] = k.public.0;
-    second_box
+    (msg_id, second_box)
 }
 
 pub fn double_unbox(c: &[u8; USER_MESSAGE_LENGTH], sk: &crypto::SecretKey)
-                    -> Result<(crypto::PublicKey, [u8; NEW_LENGTH]), crypto::NaClError> {
+                    -> Result<(crypto::PublicKey, message::Id, [u8; NEW_LENGTH]), crypto::NaClError> {
     let mut second_box = *c;
     let ephemera = crypto::PublicKey(*array_ref![second_box, 0, 32]);
     *array_mut_ref![second_box, 0, 32] = [0;32];
@@ -1107,6 +1116,9 @@ pub fn double_unbox(c: &[u8; USER_MESSAGE_LENGTH], sk: &crypto::SecretKey)
     try!(crypto::box_open(array_mut_ref![first_box, 16, NEW_LENGTH+80],
                           array_ref![second_box, 16, NEW_LENGTH+80],
                           &crypto::Nonce([0;24]), &ephemera, sk));
+    // The msg_id is the first 32 bytes of ciphertext of the first
+    // box, which includes the 16 authentication bytes.
+    let msg_id = message::Id(*array_ref![first_box,48+32,32]);
     let n = crypto::Nonce(*array_ref![ephemera.0, 0, 24]);
     let pk = crypto::PublicKey(*array_ref![first_box,48,32]);
     let mut plain = [0u8; USER_MESSAGE_LENGTH];
@@ -1114,20 +1126,21 @@ pub fn double_unbox(c: &[u8; USER_MESSAGE_LENGTH], sk: &crypto::SecretKey)
                           array_ref![first_box, 64, NEW_LENGTH+32],
                           &n, &pk, sk));
     let (_, out) = array_refs!(&plain, 64+32, 415);
-    Ok((pk, *out))
+    Ok((pk, msg_id, *out))
 }
 
 #[test]
 fn test_double_box() {
     let mut stupid = [0; NEW_LENGTH];
     stupid[5] = 3;
-    let k1 = crypto::box_keypair().unwrap();
-    let k2 = crypto::box_keypair().unwrap();
+    let k1 = crypto::box_keypair();
+    let k2 = crypto::box_keypair();
     println!("Starting double_box");
-    let o = double_box(&stupid, &k2.public, &k1);
+    let (id, o) = double_box(&stupid, &k2.public, &k1);
     println!("Starting double_unbox");
-    let (p,silly) = double_unbox(&o, &k2.secret).unwrap();
+    let (p,id2,silly) = double_unbox(&o, &k2.secret).unwrap();
     println!("Testing results");
+    assert_eq!(id, id2);
     assert_eq!(p, k1.public);
     assert_eq!(silly[0], stupid[0]);
     assert_eq!(silly[5], stupid[5]);
