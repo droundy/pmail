@@ -423,8 +423,17 @@ impl AddressBook {
                 let m = Message::from_bytes(&data);
                 match m {
                     Message::Acknowledge { msg_id } => {
-                        info!("Acknowledgement of message {}", dht::codename(&msg_id.0));
-                        self.unacknowledged.remove(&msg_id);
+                        if self.unacknowledged.contains_key(&msg_id) {
+                            info!("Acknowledgement of message {}", dht::codename(&msg_id.0));
+                            self.unacknowledged.remove(&msg_id);
+                        } else {
+                            info!("Duplicate acknowledgement of message {}", dht::codename(&msg_id.0));
+                        }
+                        let mut q = String::new();
+                        for k in self.unacknowledged.keys() {
+                            q = format!("{} '{}'", q, dht::codename(&k.0));
+                        }
+                        info!("Messages remaining in queue: {}", q);
                     },
                     _ => {},
                 };
