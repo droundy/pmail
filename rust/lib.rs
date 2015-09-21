@@ -13,6 +13,7 @@ pub mod dht;
 pub mod pmail;
 pub mod str255;
 pub mod message;
+pub mod mailbox;
 
 pub use udp::{PACKET_LENGTH};
 

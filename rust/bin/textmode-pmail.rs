@@ -15,9 +15,13 @@ use std::sync::{ Mutex };
 use rustbox::{Color, RustBox};
 use rustbox::Key;
 
+use onionsalt::crypto::{random_u64};
+
 use pmail::pmail::{AddressBook, Message};
 use pmail::str255::{Str255};
 use pmail::dht;
+use pmail::mailbox;
+use pmail::udp;
 
 struct LogData {
     messages: Vec<String>,
@@ -151,6 +155,7 @@ fn main() {
     let mut nice_comments = Vec::new(); // for now, just store messages here
 
     let mut addressbook = AddressBook::read().unwrap();
+    let mut mailbox = mailbox::Mailbox::new().unwrap();
 
     let rustbox = match RustBox::init(Default::default()) {
         Result::Ok(v) => v,
@@ -219,14 +224,15 @@ fn main() {
                                     c[i] = mess.content[i];
                                 }
                                 let m = Message::Comment {
-                                    thread: 0,
-                                    time: 0,
+                                    thread: random_u64(),
+                                    time: udp::epoch_time(),
                                     message_length: editing.len() as u32,
                                     message_start: 0,
                                     contents: c,
                                 };
                                 if let Some(k) = addressbook.lookup(&name) {
-                                    addressbook.send(&k, &m);
+                                    let msg_id = addressbook.send(&k, &m);
+                                    mailbox.save(msg_id, &addressbook.my_key(), &m).unwrap();
                                 }
                                 nice_comments.push(format!("me: {}", editing));
                             }
@@ -295,6 +301,7 @@ fn main() {
                                                        &std::str::from_utf8(&contents).unwrap()));
                         }
                     }
+                    mailbox.save(msg_id, &p, &m).unwrap();
                     let ack = Message::Acknowledge {
                         msg_id: msg_id,
                     };

@@ -335,7 +335,7 @@ impl AddressBook {
         self.hear_rendezvous.recv().unwrap()
     }
 
-    pub fn send(&mut self, who: &crypto::PublicKey, msg: &Message) {
+    pub fn send(&mut self, who: &crypto::PublicKey, msg: &Message) -> message::Id {
         let mut plaintext = [0u8; DECRYPTED_USER_MESSAGE_LENGTH];
         msg.bytes(&mut plaintext);
         let (msg_id, c) = dht::double_box(&plaintext, who, &self.myself);
@@ -353,6 +353,7 @@ impl AddressBook {
             }
             info!("Messages in queue: {}", q);
         }
+        msg_id
     }
     pub fn send_doubleboxed(&mut self, who: &crypto::PublicKey, msg_id: &message::Id, c: &[u8;USER_MESSAGE_LENGTH]) {
         let ren = self.rendezvous(who);
@@ -525,6 +526,10 @@ impl AddressBook {
             try!(f.write_all(&self.secret_ids[s].0));
         }
         Ok(())
+    }
+
+    pub fn my_key(&self) -> crypto::PublicKey {
+        self.myself.public
     }
 }
 

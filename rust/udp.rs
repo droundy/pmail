@@ -168,6 +168,10 @@ pub fn listen(send_period_ms: u64) -> Result<(SyncSender<RawEncryptedMessage>,
 /// buggy use of thereof.
 pub const EPOCH: time::Timespec = time::Timespec { sec: 1420092000, nsec: 0 };
 
+pub fn epoch_time() -> u32 {
+    (time::get_time().sec - EPOCH.sec) as u32
+}
+
 pub fn now_ms() -> u64 {
     let now = time::get_time();
     let mut ms = (now.sec - EPOCH.sec) as u64 * 1000;
