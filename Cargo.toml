@@ -4,6 +4,7 @@ version = "0.1.0"
 authors = ["David Roundy <roundyd@physics.oregonstate.edu>"]
 
 license = "GPLv3"
+build = "build.rs"
 
 [[bin]]
 name = "relay"
@@ -18,12 +19,20 @@ path = "rust/bin/textmode-pmail.rs"
 name = "pmail"
 path = "rust/lib.rs"
 
+[build-dependencies]
+serde_codegen = "0.5"
+syntex = "0.11"
+
 [dependencies]
 rustbox = "0.7"
 
 onionsalt = { version = "*", git = "https://github.com/droundy/onionsalt" }
+lazyfs = { version = "*", git = "https://github.com/droundy/lazyfs" }
 arrayref = "0.3.0"
 
 log = "0.3"
-env_logger = "*"
+env_logger = "0.3"
 time = "0.1"
+
+serde = "0.6"
+serde_json = "0.6"

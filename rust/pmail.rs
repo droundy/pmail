@@ -17,6 +17,9 @@ use std::sync::mpsc::{ Receiver, SyncSender,
 
 use str255::{Str255};
 
+#[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash)]
+pub struct Thread(pub u64);
+
 pub enum Message {
     UserQuery {
         user: Str255
@@ -26,19 +29,19 @@ pub enum Message {
         key: crypto::PublicKey
     },
     Comment {
-        thread: u64,
+        thread: Thread,
         time: u32,
         message_length: u32,
         message_start: u32, // for long messages!
         contents: [u8; 394],
     },
     ThreadRecipients {
-        thread: u64,
+        thread: Thread,
         num_recipients: u8,
         recipients: [crypto::PublicKey; 9],
     },
     ThreadSubject {
-        thread: u64,
+        thread: Thread,
         subject: [u8; 80],
     },
     Acknowledge {
@@ -79,8 +82,8 @@ impl std::fmt::Debug for Message {
             },
             &Message::Comment { ref thread, ref time, ref message_length,
                                 ref message_start, .. } => {
-                f.write_str(&format!("Comment({}, {}, {}, {}, ...)",
-                                     thread, time, message_length, message_start))
+                f.write_str(&format!("Comment({:x}, {}, {}, {}, ...)",
+                                     thread.0, time, message_length, message_start))
             },
             &Message::Acknowledge { ref msg_id } => {
                 if *msg_id == message::Id([0;32]) && false {
@@ -112,7 +115,7 @@ impl MyBytes<[u8; DECRYPTED_USER_MESSAGE_LENGTH]> for Message {
                                ref message_start, ref contents } => {
                 let (z, t, cid, ml, ms, c) = mut_array_refs!(out, 1, 8, 4, 4, 4, 394);
                 z[0] = b'c';
-                thread.bytes(t);
+                thread.0.bytes(t);
                 time.bytes(cid);
                 message_length.bytes(ml);
                 message_start.bytes(ms);
@@ -143,7 +146,7 @@ impl MyBytes<[u8; DECRYPTED_USER_MESSAGE_LENGTH]> for Message {
             b'c' => {
                 let (_, t, cid, ml, ms, c) = array_refs!(inp, 1, 8, 4, 4, 4, 394);
                 Message::Comment {
-                    thread: u64::from_bytes(t),
+                    thread: Thread(u64::from_bytes(t)),
                     time: u32::from_bytes(cid),
                     message_length: u32::from_bytes(ml),
                     message_start: u32::from_bytes(ms),

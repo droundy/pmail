@@ -17,7 +17,7 @@ use rustbox::Key;
 
 use onionsalt::crypto::{random_u64};
 
-use pmail::pmail::{AddressBook, Message};
+use pmail::pmail::{AddressBook, Message, Thread};
 use pmail::str255::{Str255};
 use pmail::dht;
 use pmail::mailbox;
@@ -224,7 +224,7 @@ fn main() {
                                     c[i] = mess.content[i];
                                 }
                                 let m = Message::Comment {
-                                    thread: random_u64(),
+                                    thread: Thread(random_u64()),
                                     time: udp::epoch_time(),
                                     message_length: editing.len() as u32,
                                     message_start: 0,
