@@ -1,7 +1,9 @@
 use std;
+use serde_json;
 extern crate time;
 extern crate lazyfs;
 
+use format;
 use pmail;
 use message;
 use udp;
@@ -24,16 +26,27 @@ impl Mailbox {
         })
     }
     pub fn save(&mut self, msg_id: message::Id, from: &crypto::PublicKey, msg: &pmail::Message) -> Result<(), std::io::Error> {
-        use std::io::Write;
         use pmail::Message::*;
         match *msg {
-            Comment { thread, time: epochtime, message_length, contents, .. } => {
+            Comment { thread, time: epochtime, message_start, message_length, contents } => {
                 let name = try!(self.comment_name(thread, epochtime, msg_id));
-                let mut f = try!(std::fs::File::create(name));
-                // let mut buf = [0u8; 32 + DECRYPTED_USER_MESSAGE_LENGTH];
-                if (message_length as usize) < contents.len() {
-                    try!(f.write_all(format!("{}", from).as_bytes()));
-                    try!(f.write_all(&contents));
+
+                if message_start > 0 || message_length as usize > contents.len() {
+                    println!("I do not yet handle broken-up messages.");
+                } else {
+                    let formatted = format::Message {
+                        thread: thread,
+                        time: format::epoch_to_rfc3339(epochtime),
+                        id: msg_id,
+                        from: *from,
+                        contents: String::from_utf8_lossy(&contents[0..message_length as usize]).to_string(),
+                    };
+                    let mut f = try!(std::fs::File::create(name));
+                    match serde_json::to_writer(&mut f, &formatted) {
+                        Err(e) => { return Err(std::io::Error::new(std::io::ErrorKind::Other,
+                                                                   format!("error writing json {}", e))); }
+                        _ => {}
+                    }
                 }
             },
             _ => {
@@ -93,8 +106,7 @@ impl Mailbox {
     pub fn threads_from_user(&mut self) {
     }
     pub fn comments_in_thread(&mut self, thread: pmail::Thread)
-                              -> Box<Iterator<Item=(message::Id, crypto::PublicKey, pmail::Message)>> {
-        use std::io::Read;
+                              -> Box<Iterator<Item=format::Message>> {
         let dir = match self.thread_dir(thread) {
             Ok(d) => d,
             _ => {
@@ -120,11 +132,7 @@ impl Mailbox {
                 Err(_) => { return None; }
                 Ok(f) => f,
             };
-            let mut buffer = Vec::new();
-            // read the whole file
-            if f.read_to_end(&mut buffer).is_err() { return None; }
-            
-            unimplemented!()
+            serde_json::from_reader(&mut f).ok()
         }))
     }
 }

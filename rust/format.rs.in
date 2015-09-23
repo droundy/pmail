@@ -5,6 +5,7 @@ use pmail;
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Message {
     pub thread: pmail::Thread,
+    pub time: DateRfc3339,
     pub id: message::Id,
     pub from: crypto::PublicKey,
     pub contents: String,

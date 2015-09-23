@@ -20,20 +20,57 @@ use serde;
 
 #[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub struct Thread(pub u64);
+
+impl std::fmt::Display for Thread {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+        f.write_str(&format!("{:016x}", self.0))
+    }
+}
 impl serde::de::Deserialize for Thread {
     fn deserialize<D>(deserializer: &mut D) -> Result<Self, D::Error> where D: serde::Deserializer {
         use serde::de::Deserialize;
-        match u64::deserialize(deserializer) {
+        use serde::de::Error;
+        match String::deserialize(deserializer) {
             Err(e) => Err(e),
-            Ok(n) => Ok(Thread(n)),
+            Ok(bb) => {
+                let bb = bb.as_bytes();
+                if bb.len() == 16 {
+                    match sixteen_hex_to_u64(array_ref![bb,0,16]) {
+                        Some(v) => Ok(Thread(v)),
+                        None => Err(D::Error::syntax("invalid hex for Thread")),
+                    }
+                } else {
+                    Err(D::Error::syntax("wrong size for Thread"))
+                }
+            },
         }
     }
 }
 impl serde::ser::Serialize for Thread {
     fn serialize<S>(&self, serializer: &mut S) -> Result<(), S::Error> where S: serde::ser::Serializer {
         use serde::ser::Serialize;
-        self.0.serialize(serializer)
+        format!("{}", self).serialize(serializer)
     }
+}
+fn sixteen_hex_to_u64(bytes: &[u8;16]) -> Option<u64> {
+    fn hexit_to_u8(hexit: u8) -> Option<u8> {
+        match hexit {
+            b'0' ... b'9' => Some(hexit - b'0'),
+            b'a' ... b'f' => Some(hexit - b'a' + 10),
+            _ => None,
+        }
+    }
+    let mut out = 0;
+    for i in 0 .. 16 {
+        match hexit_to_u8(bytes[i]) {
+            None => { return None; },
+            Some(b) => {
+                out = out << 4;
+                out += b as u64;
+            },
+        }
+    }
+    Some(out)
 }
 
 pub enum Message {
