@@ -7,4 +7,8 @@ pub struct Message {
     pub thread: pmail::Thread,
     pub id: message::Id,
     pub from: crypto::PublicKey,
+    pub contents: String,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Recipients(Vec<crypto::PublicKey>);

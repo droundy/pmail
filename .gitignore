@@ -12,4 +12,3 @@ build
 *.lock
 target
 *key
-.test*

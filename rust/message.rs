@@ -41,24 +41,22 @@ impl serde::ser::Serialize for Id {
 
 #[cfg(test)]
 mod test {
-    use std::fs;
     use serde_json;
     use onionsalt::crypto;
+    use tempfile;
+    use std;
+    use std::io::Seek;
 
     #[test]
     fn serialize() {
-        let name = ".test-id";
         let x = super::Id(crypto::box_keypair().public.0);
 
-        {
-            let mut f = fs::File::create(name).unwrap();
-            serde_json::to_writer(&mut f, &x).unwrap();
-        }
-        {
-            let mut f = fs::File::open(name).unwrap();
-            let kk: super::Id = serde_json::from_reader(&mut f).unwrap();
-            println!("found id {}", kk);
-            assert_eq!(kk, x);
-        }
+        let mut f = tempfile::TempFile::new().unwrap();
+        serde_json::to_writer(&mut f, &x).unwrap();
+
+        f.seek(std::io::SeekFrom::Start(0)).unwrap();
+        let kk: super::Id = serde_json::from_reader(&mut f).unwrap();
+        println!("found {}", kk);
+        assert_eq!(kk, x);
     }
 }

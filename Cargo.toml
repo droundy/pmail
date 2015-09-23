@@ -29,6 +29,7 @@ rustbox = "0.7"
 onionsalt = { version = "*", git = "https://github.com/droundy/onionsalt" }
 lazyfs = { version = "*", git = "https://github.com/droundy/lazyfs" }
 arrayref = "0.3.0"
+tempfile = "1"
 
 log = "0.3"
 env_logger = "0.3"
