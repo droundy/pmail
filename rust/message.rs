@@ -1,4 +1,6 @@
 use std;
+use onionsalt::crypto;
+use serde;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Id(pub [u8; 32]);
@@ -14,5 +16,49 @@ impl std::fmt::Display for Id {
         s = s + &format!("{:02x}{:02x}{:02x}{:02x}", self.0[24], self.0[25], self.0[26], self.0[27]);
         s = s + &format!("{:02x}{:02x}{:02x}{:02x}", self.0[28], self.0[29], self.0[30], self.0[31]);
         f.write_str(&s)
+    }
+}
+impl Id {
+    pub fn random() -> Self {
+        Id(crypto::random_32())
+    }
+}
+impl serde::de::Deserialize for Id {
+    fn deserialize<D>(deserializer: &mut D) -> Result<Self, D::Error> where D: serde::Deserializer {
+        use serde::de::Deserialize;
+        match crypto::PublicKey::deserialize(deserializer) {
+            Err(e) => Err(e),
+            Ok(pk) => Ok(Id(pk.0)),
+        }
+    }
+}
+impl serde::ser::Serialize for Id {
+    fn serialize<S>(&self, serializer: &mut S) -> Result<(), S::Error> where S: serde::Serializer {
+        use serde::ser::Serialize;
+        crypto::PublicKey(self.0).serialize(serializer)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::fs;
+    use serde_json;
+    use onionsalt::crypto;
+
+    #[test]
+    fn serialize() {
+        let name = ".test-id";
+        let x = super::Id(crypto::box_keypair().public.0);
+
+        {
+            let mut f = fs::File::create(name).unwrap();
+            serde_json::to_writer(&mut f, &x).unwrap();
+        }
+        {
+            let mut f = fs::File::open(name).unwrap();
+            let kk: super::Id = serde_json::from_reader(&mut f).unwrap();
+            println!("found id {}", kk);
+            assert_eq!(kk, x);
+        }
     }
 }

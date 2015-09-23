@@ -16,9 +16,25 @@ use std::sync::mpsc::{ Receiver, SyncSender,
                        Sender, };
 
 use str255::{Str255};
+use serde;
 
 #[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub struct Thread(pub u64);
+impl serde::de::Deserialize for Thread {
+    fn deserialize<D>(deserializer: &mut D) -> Result<Self, D::Error> where D: serde::Deserializer {
+        use serde::de::Deserialize;
+        match u64::deserialize(deserializer) {
+            Err(e) => Err(e),
+            Ok(n) => Ok(Thread(n)),
+        }
+    }
+}
+impl serde::ser::Serialize for Thread {
+    fn serialize<S>(&self, serializer: &mut S) -> Result<(), S::Error> where S: serde::ser::Serializer {
+        use serde::ser::Serialize;
+        self.0.serialize(serializer)
+    }
+}
 
 pub enum Message {
     UserQuery {

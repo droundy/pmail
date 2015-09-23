@@ -7,6 +7,8 @@ extern crate arrayref;
 extern crate log;
 
 extern crate onionsalt;
+extern crate serde;
+extern crate serde_json;
 
 pub mod udp;
 pub mod dht;
@@ -14,6 +16,7 @@ pub mod pmail;
 pub mod str255;
 pub mod message;
 pub mod mailbox;
+pub mod format;
 
 pub use udp::{PACKET_LENGTH};
 
