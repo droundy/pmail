@@ -25,6 +25,14 @@ impl Mailbox {
             dir: dir,
         })
     }
+    pub fn in_directory(d: &str) -> Result<Mailbox, std::io::Error> {
+        let mut dir = std::path::PathBuf::from(d);
+        dir.push(".pmail/messages");
+        try!(std::fs::create_dir_all(&dir));
+        Ok(Mailbox {
+            dir: dir,
+        })
+    }
     pub fn save(&mut self, msg_id: message::Id, from: &crypto::PublicKey, msg: &pmail::Message) -> Result<(), std::io::Error> {
         use pmail::Message::*;
         match *msg {
@@ -73,7 +81,7 @@ impl Mailbox {
         Ok(dir)
     }
 
-    pub fn threads(&mut self) -> Box<Iterator<Item=pmail::Thread>> {
+    pub fn threads(&self) -> Box<Iterator<Item=pmail::Thread>> {
         let dir = self.dir.clone();
         Box::new(lazyfs::read_dir(&dir).filter_map(move|de| {
             de.file_name().as_os_str().to_str().and_then(|s| {
@@ -105,7 +113,7 @@ impl Mailbox {
     }
     pub fn threads_from_user(&mut self) {
     }
-    pub fn comments_in_thread(&mut self, thread: pmail::Thread)
+    pub fn comments_in_thread(&self, thread: pmail::Thread)
                               -> Box<Iterator<Item=format::Message>> {
         let dir = match self.thread_dir(thread) {
             Ok(d) => d,
@@ -114,20 +122,25 @@ impl Mailbox {
             },
         };
         Box::new(lazyfs::read_dir(&dir).filter_map(|de| {
-            let name = match de.file_name().as_os_str().to_str() {
+            let name = match de.path().as_os_str().to_str() {
                 None => { return None; }
                 Some(n) => n.to_string()
             };
-            let _msg_id = match name.rsplit('-').next().map(|s|{s.as_bytes()}).and_then(|b| {
-                if b.len() == 64 {
-                    sixtyfour_hex_to_32_bytes(array_ref![b,0,64]).map(|x|{message::Id(x)})
-                } else {
-                    println!("Wrong length: '{}'", name);
-                    None
-                }}) {
-                Some(x) => x,
-                None => { return None; }
-            };
+            if de.file_name().as_os_str().to_string_lossy().len() != 85 {
+                // This is not an actual comment file, so no need to
+                // open it up.
+                return None;
+            }
+            // let _msg_id = match name.rsplit('-').next().map(|s|{s.as_bytes()}).and_then(|b| {
+            //     if b.len() == 64 {
+            //         sixtyfour_hex_to_32_bytes(array_ref![b,0,64]).map(|x|{message::Id(x)})
+            //     } else {
+            //         println!("Wrong length: '{}'", name);
+            //         None
+            //     }}) {
+            //     Some(x) => x,
+            //     None => { return None; }
+            // };
             let mut f = match std::fs::File::open(name) {
                 Err(_) => { return None; }
                 Ok(f) => f,
@@ -137,18 +150,18 @@ impl Mailbox {
     }
 }
 
-fn sixtyfour_hex_to_32_bytes(bytes: &[u8;64]) -> Option<[u8;32]> {
-    let mut out = [0;32];
-    for i in 0 .. 32 {
-        match hex_to_u8(array_ref![bytes,2*i,2]) {
-            None => { return None; },
-            Some(b) => {
-                out[i] = b;
-            },
-        }
-    }
-    Some(out)
-}
+// fn sixtyfour_hex_to_32_bytes(bytes: &[u8;64]) -> Option<[u8;32]> {
+//     let mut out = [0;32];
+//     for i in 0 .. 32 {
+//         match hex_to_u8(array_ref![bytes,2*i,2]) {
+//             None => { return None; },
+//             Some(b) => {
+//                 out[i] = b;
+//             },
+//         }
+//     }
+//     Some(out)
+// }
 fn fourteen_hex_to_u64(bytes: &[u8;14]) -> Option<u64> {
     let mut out = 0;
     for i in 0 .. 14 {
@@ -199,8 +212,83 @@ fn test_hexit() {
 
 #[test]
 fn test_threads() {
-    let mut m = Mailbox::new().unwrap();
+    let m = Mailbox::new().unwrap();
     for t in m.threads() {
         println!("thread is: {:x}", t.0);
     }
+}
+
+#[test]
+fn test_mailbox() {
+    let name = format!("/tmp/testing-{:x}", crypto::random_u64());
+    println!("mailbox in {}", name);
+    let mut mb = Mailbox::in_directory(&name).unwrap();
+    let m1 = format::Message {
+        thread: pmail::Thread::random(),
+        time: format::epoch_to_rfc3339(crypto::random_u64() as u32),
+        id: message::Id::random(),
+        from: crypto::box_keypair().public,
+        contents: "this is m1".to_string(),
+    };
+    let m2 = format::Message {
+        thread: pmail::Thread::random(),
+        time: format::epoch_to_rfc3339(crypto::random_u64() as u32),
+        id: message::Id::random(),
+        from: crypto::box_keypair().public,
+        contents: "this is m2".to_string(),
+    };
+    let m3 = format::Message {
+        thread: m2.thread,
+        time: format::epoch_to_rfc3339(crypto::random_u64() as u32),
+        id: message::Id::random(),
+        from: crypto::box_keypair().public,
+        contents: "this is m3".to_string(),
+    };
+    for m in &[&m1,&m2,&m3] {
+        let len = m.contents.as_bytes().len();
+        let cc = m.contents.as_bytes();
+        let mut c = [0;394];
+        for i in 0 .. len {
+            c[i] = cc[i];
+        }
+        let pm = pmail::Message::Comment {
+            thread: m.thread,
+            time: format::rfc3339_to_epoch(m.time),
+            message_start: 0,
+            message_length: len as u32,
+            contents: c,
+        };
+        println!("saving thread {} message '{}'", m.thread, m.contents);
+        mb.save(m.id, &m.from, &pm).unwrap();
+    }
+    let mut got_t1 = false;
+    let mut got_t2 = false;
+    let mut got_m1 = false;
+    let mut got_m2 = false;
+    let mut got_m3 = false;
+    for t in mb.threads() {
+        println!("t is {}", t);
+        if t == m1.thread { got_t1 = true; }
+        if t == m2.thread { got_t2 = true; }
+        for c in mb.comments_in_thread(t) {
+            println!("c is {}", c.contents);
+            if t == m1.thread {
+                assert_eq!(c, m1);
+                got_m1 = true;
+            }
+            if c.id == m2.id {
+                assert_eq!(c, m2);
+                got_m2 = true;
+            }
+            if c.id == m3.id {
+                assert_eq!(c, m3);
+                got_m3 = true;
+            }
+        }
+    }
+    assert!(got_t1);
+    assert!(got_t2);
+    assert!(got_m1);
+    assert!(got_m2);
+    assert!(got_m3);
 }

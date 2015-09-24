@@ -21,6 +21,11 @@ use serde;
 #[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub struct Thread(pub u64);
 
+impl Thread {
+    pub fn random() -> Self {
+        Thread(crypto::random_u64())
+    }
+}
 impl std::fmt::Display for Thread {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
         f.write_str(&format!("{:016x}", self.0))

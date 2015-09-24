@@ -11,6 +11,9 @@ pub struct DateRfc3339(u32);
 pub fn epoch_to_rfc3339(t: u32) -> DateRfc3339 {
     DateRfc3339(t)
 }
+pub fn rfc3339_to_epoch(t: DateRfc3339) -> u32 {
+    t.0
+}
 impl std::fmt::Display for DateRfc3339 {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
         let mut when = udp::EPOCH;

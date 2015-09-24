@@ -152,10 +152,10 @@ fn main() {
             r: r,
         }
     };
-    let mut nice_comments = Vec::new(); // for now, just store messages here
 
     let mut addressbook = AddressBook::read().unwrap();
     let mut mailbox = mailbox::Mailbox::new().unwrap();
+    let mut nice_comments = format_messages(&mailbox, &addressbook);
 
     let rustbox = match RustBox::init(Default::default()) {
         Result::Ok(v) => v,
@@ -234,7 +234,7 @@ fn main() {
                                     let msg_id = addressbook.send(&k, &m);
                                     mailbox.save(msg_id, &addressbook.my_key(), &m).unwrap();
                                 }
-                                nice_comments.push(format!("me: {}", editing));
+                                nice_comments = format_messages(&mailbox, &addressbook);
                             }
                         }
                         *editing = String::new();
@@ -290,18 +290,8 @@ fn main() {
                 Message::Comment { contents, message_length, .. } => {
                     info!("Got comment from {}", p);
                     info!("    {}", &std::str::from_utf8(&contents[0 .. message_length as usize]).unwrap());
-                    match addressbook.reverse_lookup(&p) {
-                        Some(user) => {
-                            nice_comments.push(format!("{}: {}",
-                                                       user, &std::str::from_utf8(&contents).unwrap()));
-                        }
-                        None => {
-                            nice_comments.push(format!("{}: {}",
-                                                       dht::codename(&p.0),
-                                                       &std::str::from_utf8(&contents).unwrap()));
-                        }
-                    }
                     mailbox.save(msg_id, &p, &m).unwrap();
+                    nice_comments = format_messages(&mailbox, &addressbook);
                     let ack = Message::Acknowledge {
                         msg_id: msg_id,
                     };
@@ -408,4 +398,24 @@ fn text_boxes(rb: &RustBox, names: &[&String], style: rustbox::Style, color: rus
             text_box_below(rb, names[i], style, color, x, y+2*i, width);
         }
     }
+}
+
+fn format_messages(mb: &mailbox::Mailbox, ab: &AddressBook) -> Vec<String> {
+    let mut nice_comments = Vec::new();
+    for thread in mb.threads() {
+        for msg in mb.comments_in_thread(thread) {
+            match ab.reverse_lookup(&msg.from) {
+                Some(user) => {
+                    nice_comments.push(format!("{}: {}",
+                                               user, &msg.contents));
+                }
+                None => {
+                    nice_comments.push(format!("{}: {}",
+                                               dht::codename(&msg.from.0),
+                                               &msg.contents));
+                }
+            }
+        }
+    }
+    nice_comments
 }
