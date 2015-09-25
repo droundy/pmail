@@ -38,6 +38,8 @@ impl Mailbox {
         match *msg {
             Comment { thread, time: epochtime, message_start, message_length, contents } => {
                 let name = try!(self.comment_name(thread, epochtime, msg_id));
+                let mut time_name = try!(self.thread_dir(thread));
+                time_name.push("time");
 
                 if message_start > 0 || message_length as usize > contents.len() {
                     println!("I do not yet handle broken-up messages.");
@@ -49,6 +51,15 @@ impl Mailbox {
                         from: *from,
                         contents: String::from_utf8_lossy(&contents[0..message_length as usize]).to_string(),
                     };
+                    {
+                        let mut f = try!(std::fs::File::create(time_name));
+                        match serde_json::to_writer(&mut f, &format::DateRfc3339::now()) {
+                            Err(e) => { return Err(std::io::Error::new(std::io::ErrorKind::Other,
+                                                                       format!("error writing json {}", e))); }
+                            _ => {}
+                        }
+                    }
+
                     let mut f = try!(std::fs::File::create(name));
                     match serde_json::to_writer(&mut f, &formatted) {
                         Err(e) => { return Err(std::io::Error::new(std::io::ErrorKind::Other,
@@ -83,31 +94,41 @@ impl Mailbox {
 
     pub fn threads(&self) -> Box<Iterator<Item=pmail::Thread>> {
         let dir = self.dir.clone();
-        Box::new(lazyfs::read_dir(&dir).filter_map(move|de| {
-            de.file_name().as_os_str().to_str().and_then(|s| {
-                let bs = s.as_bytes();
-                if bs.len() == 2 {
-                    hex_to_u8(array_ref![bs,0,2])
-                } else {
-                    None
-                }
-            })
-        }).flat_map(move|first_byte| {
-            let mut subdir = dir.clone();
-            subdir.push(&format!("{:02x}", first_byte));
-            lazyfs::read_dir(&subdir).filter_map(move |de| {
+        Box::new({
+            let mut threads: Vec<(format::DateRfc3339, pmail::Thread)> = lazyfs::read_dir(&dir).filter_map(move|de| {
                 de.file_name().as_os_str().to_str().and_then(|s| {
-                    let s = s.as_bytes();
-                    if s.len() != 14 {
-                        None
+                    let bs = s.as_bytes();
+                    if bs.len() == 2 {
+                        hex_to_u8(array_ref![bs,0,2])
                     } else {
-                        fourteen_hex_to_u64(array_ref![s,0,14])
+                        None
                     }
-                }).map(|t| {
-                    pmail::Thread(t + ((first_byte as u64) << 56))
                 })
-            })
-        }))
+            }).flat_map(move|first_byte| {
+                let mut subdir = dir.clone();
+                subdir.push(&format!("{:02x}", first_byte));
+                lazyfs::read_dir(&subdir).filter_map(move |de| {
+                    de.file_name().as_os_str().to_str().and_then(|s| {
+                        let s = s.as_bytes();
+                        if s.len() != 14 {
+                            None
+                        } else {
+                            fourteen_hex_to_u64(array_ref![s,0,14]).and_then(|t|{
+                                let mut time_name = de.path().clone();
+                                time_name.push("time");
+                                std::fs::File::open(&time_name).ok().and_then(|mut f|{
+                                    serde_json::from_reader(&mut f).ok().and_then(|tm|{
+                                        Some((tm,pmail::Thread(t + ((first_byte as u64) << 56))))
+                                    })
+                                })
+                            })
+                        }
+                    })
+                })
+            }).collect();
+            threads.sort_by(|a,b|{a.0.cmp(&b.0)});
+            threads.into_iter().map(|x|{x.1})
+        })
     }
     pub fn users(&mut self) {
     }
@@ -131,16 +152,6 @@ impl Mailbox {
                 // open it up.
                 return None;
             }
-            // let _msg_id = match name.rsplit('-').next().map(|s|{s.as_bytes()}).and_then(|b| {
-            //     if b.len() == 64 {
-            //         sixtyfour_hex_to_32_bytes(array_ref![b,0,64]).map(|x|{message::Id(x)})
-            //     } else {
-            //         println!("Wrong length: '{}'", name);
-            //         None
-            //     }}) {
-            //     Some(x) => x,
-            //     None => { return None; }
-            // };
             let mut f = match std::fs::File::open(name) {
                 Err(_) => { return None; }
                 Ok(f) => f,

@@ -22,6 +22,7 @@ use pmail::str255::{Str255};
 use pmail::dht;
 use pmail::mailbox;
 use pmail::udp;
+use pmail::format;
 
 struct LogData {
     messages: Vec<String>,
@@ -197,7 +198,10 @@ fn main() {
                     Some(Key::Ctrl('q')) => { break; }
                     Some(Key::Esc) => { break; }
                     Some(Key::Ctrl('l')) => { us = UserState::Logs; }
-                    Some(Key::Ctrl('p')) => { us = UserState::Messages; }
+                    Some(Key::Ctrl('p')) => {
+                        us = UserState::Messages;
+                        nice_comments = format_messages(&mailbox, &addressbook);
+                    }
                     Some(Key::Ctrl('u')) => { us = UserState::FindUser; }
                     Some(Key::Char(c)) => { editing.push(c); }
                     Some(Key::Enter) => {
@@ -406,11 +410,13 @@ fn format_messages(mb: &mailbox::Mailbox, ab: &AddressBook) -> Vec<String> {
         for msg in mb.comments_in_thread(thread) {
             match ab.reverse_lookup(&msg.from) {
                 Some(user) => {
-                    nice_comments.push(format!("{}: {}",
+                    nice_comments.push(format!("[{}] {}: {}",
+                                               format_date_ago(msg.time),
                                                user, &msg.contents));
                 }
                 None => {
-                    nice_comments.push(format!("{}: {}",
+                    nice_comments.push(format!("[{}] {}: {}",
+                                               format_date_ago(msg.time),
                                                dht::codename(&msg.from.0),
                                                &msg.contents));
                 }
@@ -418,4 +424,37 @@ fn format_messages(mb: &mailbox::Mailbox, ab: &AddressBook) -> Vec<String> {
         }
     }
     nice_comments
+}
+
+fn format_date_ago(dt: format::DateRfc3339) -> String {
+    let ago = (format::DateRfc3339::now() - dt).num_seconds();
+    let minute = 60;
+    let hour = 60*minute;
+    let day = 24*hour;
+    let week = 7*day;
+    let month = 30*day;
+    let year = 365*day;
+    if ago <= 1 {
+        format!("{} second ago", ago)
+    } else if ago < minute {
+        format!("{} seconds ago", ago)
+    } else if ago < 2*minute {
+        format!("1 minute ago")
+    } else if ago < hour {
+        format!("{} minutes ago", ago/minute)
+    } else if ago < 2*hour {
+        format!("1 hour ago")
+    } else if ago < day {
+        format!("{} hours ago", ago/hour)
+    } else if ago < 2*day {
+        format!("1 day ago")
+    } else if ago < 2*week {
+        format!("{} days ago", ago/day)
+    } else if ago < 2*month {
+        format!("{} weeks ago", ago/week)
+    } else if ago < 2*year {
+        format!("{} months ago", ago/month)
+    } else {
+        format!("{} years ago", ago/year)
+    }
 }
