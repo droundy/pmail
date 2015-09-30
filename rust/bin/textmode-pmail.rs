@@ -156,7 +156,8 @@ fn main() {
 
     let mut addressbook = AddressBook::read().unwrap();
     let mut mailbox = mailbox::Mailbox::new().unwrap();
-    let mut nice_comments = format_messages(&mailbox, &addressbook);
+    let mut which_thread = 0;
+    let mut nice_comments = format_messages(&mailbox, which_thread, &addressbook);
 
     let rustbox = match RustBox::init(Default::default()) {
         Result::Ok(v) => v,
@@ -195,12 +196,18 @@ fn main() {
                     UserState::Messages => { &mut message_tosend }
                 };
                 match key {
+                    Some(Key::Tab) => {
+                        if us == UserState::Messages {
+                            which_thread += 1;
+                            nice_comments = format_messages(&mailbox, which_thread, &addressbook);
+                        }
+                    }
                     Some(Key::Ctrl('q')) => { break; }
                     Some(Key::Esc) => { break; }
                     Some(Key::Ctrl('l')) => { us = UserState::Logs; }
                     Some(Key::Ctrl('p')) => {
                         us = UserState::Messages;
-                        nice_comments = format_messages(&mailbox, &addressbook);
+                        nice_comments = format_messages(&mailbox, which_thread, &addressbook);
                     }
                     Some(Key::Ctrl('u')) => { us = UserState::FindUser; }
                     Some(Key::Char(c)) => { editing.push(c); }
@@ -238,7 +245,7 @@ fn main() {
                                     let msg_id = addressbook.send(&k, &m);
                                     mailbox.save(msg_id, &addressbook.my_key(), &m).unwrap();
                                 }
-                                nice_comments = format_messages(&mailbox, &addressbook);
+                                nice_comments = format_messages(&mailbox, which_thread, &addressbook);
                             }
                         }
                         *editing = String::new();
@@ -295,7 +302,7 @@ fn main() {
                     info!("Got comment from {}", p);
                     info!("    {}", &std::str::from_utf8(&contents[0 .. message_length as usize]).unwrap());
                     mailbox.save(msg_id, &p, &m).unwrap();
-                    nice_comments = format_messages(&mailbox, &addressbook);
+                    nice_comments = format_messages(&mailbox, which_thread, &addressbook);
                     let ack = Message::Acknowledge {
                         msg_id: msg_id,
                     };
@@ -404,9 +411,10 @@ fn text_boxes(rb: &RustBox, names: &[&String], style: rustbox::Style, color: rus
     }
 }
 
-fn format_messages(mb: &mailbox::Mailbox, ab: &AddressBook) -> Vec<String> {
+fn format_messages(mb: &mailbox::Mailbox, which_thread: usize, ab: &AddressBook) -> Vec<String> {
     let mut nice_comments = Vec::new();
-    for thread in mb.threads() {
+    let nthreads = mb.threads().count();
+    if let Some(thread) = mb.threads().nth(which_thread % nthreads) {
         for msg in mb.comments_in_thread(thread) {
             match ab.reverse_lookup(&msg.from) {
                 Some(user) => {
