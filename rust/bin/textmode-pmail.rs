@@ -443,7 +443,7 @@ fn the_current_thread(mb: &mailbox::Mailbox, which_user: usize, which_thread: us
 
 fn format_messages(mb: &mailbox::Mailbox, which_user: usize, which_thread: usize, ab: &AddressBook) -> Vec<String> {
     let mut nice_comments = Vec::new();
-    let thread = the_current_thread(mb, which_thread, which_thread, ab);
+    let thread = the_current_thread(mb, which_user, which_thread, ab);
 
     nice_comments.push(format!("thread: {}", thread));
     for msg in mb.comments_in_thread(thread) {

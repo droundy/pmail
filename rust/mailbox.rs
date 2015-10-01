@@ -197,22 +197,26 @@ impl Mailbox {
                 return Box::new(std::iter::empty());
             },
         };
-        Box::new(lazyfs::read_dir(&dir).filter_map(|de| {
-            let name = match de.path().as_os_str().to_str() {
-                None => { return None; }
-                Some(n) => n.to_string()
-            };
-            if de.file_name().as_os_str().to_string_lossy().len() != 85 {
-                // This is not an actual comment file, so no need to
-                // open it up.
-                return None;
-            }
-            let mut f = match std::fs::File::open(name) {
-                Err(_) => { return None; }
-                Ok(f) => f,
-            };
-            serde_json::from_reader(&mut f).ok()
-        }))
+        Box::new({
+            let mut cs: Vec<format::Message> = lazyfs::read_dir(&dir).filter_map(|de| {
+                let name = match de.path().as_os_str().to_str() {
+                    None => { return None; }
+                    Some(n) => n.to_string()
+                };
+                if de.file_name().as_os_str().to_string_lossy().len() != 85 {
+                    // This is not an actual comment file, so no need to
+                    // open it up.
+                    return None;
+                }
+                let mut f = match std::fs::File::open(name) {
+                    Err(_) => { return None; }
+                    Ok(f) => f,
+                };
+                serde_json::from_reader(&mut f).ok()
+            }).collect();
+            cs.sort_by(|a,b|{a.time.cmp(&b.time)});
+            cs.into_iter()
+        })
     }
 }
 
