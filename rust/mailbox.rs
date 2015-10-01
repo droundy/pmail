@@ -11,6 +11,7 @@ use onionsalt::crypto;
 
 pub struct Mailbox {
     dir: std::path::PathBuf,
+    users: std::path::PathBuf,
 }
 
 impl Mailbox {
@@ -19,24 +20,50 @@ impl Mailbox {
             Some(hd) => hd,
             None => std::path::PathBuf::from("."),
         };
+        let mut userdir = dir.clone();
+        userdir.push(".pmail/users");
         dir.push(".pmail/messages");
         try!(std::fs::create_dir_all(&dir));
         Ok(Mailbox {
             dir: dir,
+            users: userdir,
         })
     }
-    pub fn in_directory(d: &str) -> Result<Mailbox, std::io::Error> {
+    #[cfg(test)]
+    fn in_directory(d: &str) -> Result<Mailbox, std::io::Error> {
         let mut dir = std::path::PathBuf::from(d);
+        let mut userdir = dir.clone();
+        userdir.push(".pmail/users");
         dir.push(".pmail/messages");
         try!(std::fs::create_dir_all(&dir));
         Ok(Mailbox {
             dir: dir,
+            users: userdir,
         })
     }
-    pub fn save(&mut self, msg_id: message::Id, from: &crypto::PublicKey, msg: &pmail::Message) -> Result<(), std::io::Error> {
+    pub fn save(&mut self, msg_id: message::Id, from: &crypto::PublicKey,
+                to: &crypto::PublicKey, msg: &pmail::Message) -> Result<(), std::io::Error> {
         use pmail::Message::*;
         match *msg {
             Comment { thread, time: epochtime, message_start, message_length, contents } => {
+                for u in &[*to, *from] {
+                    // first, save the fact that this user commented in this thread
+                    let mut userdir = try!(self.user_dir(u));
+                    userdir.push("threads");
+                    let mut users: Vec<_> = self.threads_from_user(from).collect();
+                    let pos = users.iter().position(|x| { *x == thread });
+                    if let Some(pos) = pos {
+                        users.remove(pos);
+                    }
+                    users.push(thread);
+                    let mut f = try!(std::fs::File::create(userdir));
+                    match serde_json::to_writer(&mut f, &users) {
+                        Err(e) => { return Err(std::io::Error::new(std::io::ErrorKind::Other,
+                                                                   format!("error writing json {}", e))); }
+                        _ => {}
+                    }
+                }
+                // now save the latest time of the thread
                 let name = try!(self.comment_name(thread, epochtime, msg_id));
                 let mut time_name = try!(self.thread_dir(thread));
                 time_name.push("time");
@@ -91,6 +118,13 @@ impl Mailbox {
         try!(std::fs::create_dir_all(&dir));
         Ok(dir)
     }
+    pub fn user_dir(&self, user: &crypto::PublicKey) -> Result<std::path::PathBuf, std::io::Error> {
+        let mut dir = self.users.clone();
+        dir.push(format!("{:02x}", user.0[0]));
+        dir.push(&format!("{}", user)[2..]);
+        try!(std::fs::create_dir_all(&dir));
+        Ok(dir)
+    }
 
     pub fn threads(&self) -> Box<Iterator<Item=pmail::Thread>> {
         let dir = self.dir.clone();
@@ -132,7 +166,28 @@ impl Mailbox {
     }
     pub fn users(&mut self) {
     }
-    pub fn threads_from_user(&mut self) {
+    pub fn threads_from_user(&self, user: &crypto::PublicKey) -> Box<Iterator<Item=pmail::Thread>> {
+        fn openup(mb: &Mailbox, user: &crypto::PublicKey) -> std::io::Result<std::fs::File> {
+            let mut userdir = try!(mb.user_dir(user));
+            userdir.push("threads");
+            std::fs::File::open(userdir)
+        }
+        match openup(self, user) {
+            Err(_) => {
+                info!("trouble opening from {}", user);
+                Box::new(std::iter::empty())
+            },
+            Ok(mut f) => {
+                let v: Result<Vec<_>,_>= serde_json::from_reader(&mut f);
+                match v {
+                    Ok(v) => Box::new(v.into_iter()),
+                    Err(e) => {
+                        info!("trouble parsing {} see {}", user, e);
+                        Box::new(std::iter::empty())
+                    },
+                }
+            },
+        }
     }
     pub fn comments_in_thread(&self, thread: pmail::Thread)
                               -> Box<Iterator<Item=format::Message>> {
