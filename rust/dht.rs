@@ -334,16 +334,6 @@ pub fn gethostname() -> Result<String, Error> {
     }
 }
 
-pub fn pmail_dir() -> Result<std::path::PathBuf, Error> {
-    let mut name = match std::env::home_dir() {
-        Some(hd) => hd,
-        None => std::path::PathBuf::from("."),
-    };
-    name.push(".pmail");
-    try!(std::fs::create_dir_all(&name));
-    Ok(name)
-}
-
 pub fn read_or_generate_keypair(name: std::path::PathBuf)
                                 -> Result<crypto::KeyPair, Error> {
     use std::io::Write;
@@ -764,12 +754,13 @@ impl DHT {
 
 /// Start relaying messages with a static public key (i.e. one that
 /// does not change).
-pub fn start_static_node() -> Result<(SyncSender<crypto::PublicKey>,
-                                      Receiver<crypto::PublicKey>,
-                                      Sender<EncryptedMessage>,
-                                      Receiver<UserMessage>), Error> {
+pub fn start_static_node(the_dir: &std::path::PathBuf)
+                         -> Result<(SyncSender<crypto::PublicKey>,
+                                    Receiver<crypto::PublicKey>,
+                                    Sender<EncryptedMessage>,
+                                    Receiver<UserMessage>), Error> {
     let my_key = {
-        let mut name = try!(pmail_dir());
+        let mut name = the_dir.clone();
         match gethostname() {
             Err(_) => {
                 name.push("routing.key");

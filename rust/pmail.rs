@@ -506,14 +506,14 @@ impl AddressBook {
         None
     }
 
-    pub fn read() -> Result<AddressBook, std::io::Error> {
+    pub fn read(the_dir: &std::path::PathBuf) -> Result<AddressBook, std::io::Error> {
         let my_personal_key = {
-            let mut name = dht::pmail_dir().unwrap();
+            let mut name = the_dir.clone();
             name.push("personal.key");
             dht::read_or_generate_keypair(name).unwrap()
         };
         let (public_dir, secret_dir) = try!(AddressBook::public_secret_dirs());
-        let (ask_rendezvous, hear_rendezvous, send, receive) = try!(dht::start_static_node());
+        let (ask_rendezvous, hear_rendezvous, send, receive) = try!(dht::start_static_node(the_dir));
 
         let mut ab = AddressBook {
             public_ids: HashMap::new(),
@@ -602,4 +602,22 @@ impl Drop for AddressBook {
             println!("Unable to write addressbook.  :(");
         }
     }
+}
+
+fn nice_dir(subdir_name: &str) -> Result<std::path::PathBuf, std::io::Error> {
+    let mut name = match std::env::home_dir() {
+        Some(hd) => hd,
+        None => std::path::PathBuf::from("."),
+    };
+    name.push(subdir_name);
+    try!(std::fs::create_dir_all(&name));
+    Ok(name)
+}
+
+pub fn relay_dir() -> Result<std::path::PathBuf, std::io::Error> {
+    nice_dir(".pmail/relay")
+}
+
+pub fn pmail_dir() -> Result<std::path::PathBuf, std::io::Error> {
+    nice_dir(".pmail")
 }

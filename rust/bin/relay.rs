@@ -22,7 +22,7 @@ fn main() {
         init().unwrap();
     }
 
-    let mut addressbook = AddressBook::read().unwrap();
+    let mut addressbook = AddressBook::read(&pmail::pmail::relay_dir().unwrap()).unwrap();
 
     loop {
         std::thread::sleep_ms(1000*10); // sleep a while before doing a pickup...

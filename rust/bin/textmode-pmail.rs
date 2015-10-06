@@ -166,7 +166,7 @@ fn main() {
         }
     };
 
-    let mut addressbook = AddressBook::read().unwrap();
+    let mut addressbook = AddressBook::read(&pmail::pmail::pmail_dir().unwrap()).unwrap();
     let mut mailbox = mailbox::Mailbox::new().unwrap();
     let mut which_thread = 0;
     let mut selected_user = 0;
