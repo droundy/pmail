@@ -4,7 +4,6 @@ extern crate arrayref;
 #[macro_use]
 extern crate log;
 extern crate time;
-extern crate serde_json;
 
 extern crate tiny_http;
 extern crate pmail;
@@ -15,7 +14,6 @@ extern crate rustc_serialize;
 
 use rustc_serialize::base64::{ToBase64, FromBase64, URL_SAFE};
 use tiny_http::{ServerBuilder, Response};
-use serde_json::{ser,de};
 
 use pmail::pmail::{AddressBook, Message};
 use pmail::dht;
@@ -33,7 +31,8 @@ fn main() {
     let mut addressbook = AddressBook::read(&pmail::pmail::relay_dir().unwrap()).unwrap();
 
     let response_keys = crypto::box_keypair();
-    std::thread::spawn(|| {
+    let secret_key_for_http = response_keys.public.0;
+    std::thread::spawn(move|| {
         let server = ServerBuilder::new().with_port(8000).build().unwrap();
 
         for request in server.incoming_requests() {
@@ -42,9 +41,13 @@ fn main() {
                     println!("received request! method: {:?}, url: {:?}",
                              request.method(), request.url());
                     if let Ok(vvv) = request.url().as_bytes()[1..].from_base64() {
-                        let rrr: Result<crypto::PublicKey,_> = de::from_slice(&vvv);
-                        if let Ok(v) = rrr {
-                            println!("public key: {}", v);
+                        let n = crypto::Nonce(*array_ref![vvv, 0, 24]);
+                        let mut decrypted = vec![0; vvv.len() - 8];
+                        if crypto::secretbox_open(&mut decrypted, &vvv[8..], &n, &secret_key_for_http).is_ok() {
+                            let id = String::from_utf8_lossy(&decrypted[32..]).to_string();
+                            println!("confirmed identity: {}", id);
+                        } else {
+                            println!("decryption failed!  :(");
                         }
                     }
 
@@ -85,16 +88,26 @@ fn main() {
                 },
                 Message::Comment { contents, message_length, message_start, .. } => {
                     info!("Got comment from {}", p);
-                    info!("    {}", &std::str::from_utf8(&contents[0 .. message_length as usize]).unwrap());
-                    if message_start == 0 && message_length as usize <= contents.len() {
-                        let s = String::from_utf8_lossy(&contents[0..message_length as usize]).to_string();
+                    let message_length = message_length as usize;
+                    info!("    {}", &std::str::from_utf8(&contents[0 .. message_length]).unwrap());
+                    if message_start == 0 && message_length <= contents.len() {
+                        let s = String::from_utf8_lossy(&contents[0..message_length]).to_string();
                         info!("Nice comment! {}", s);
 
                         let mut sender = SenderBuilder::localhost().unwrap().build();
+                        let mut raw_cookie = vec![0; 32 + message_length];
+                        for i in 0 .. message_length {
+                            raw_cookie[32+i] = contents[i];
+                        }
+                        let mut cookie = vec![0; 40 + message_length];
+                        let n = crypto::random_nonce();
+                        crypto::secretbox(&mut cookie[8..], &raw_cookie, &n, &response_keys.public.0);
+                        *array_mut_ref![cookie, 0, 24] = n.0;
+                        let cookie = cookie.to_base64(URL_SAFE);
                         let result = sender.send(SimpleSendableEmail::new(
                             "daveroundy@gmail.com", &s,
-                            &format!("Hello world {} http://knightley.physics.oregonstate.edu:8000/{}!",
-                                     msg_id, ser::to_vec(&response_keys.public).unwrap().to_base64(URL_SAFE))));
+                            &format!("If you registered as {}, click on the following link:\n\n http://knightley.physics.oregonstate.edu:8000/{}",
+                                     s, cookie)));
                         if result.is_err() {
                             info!("Trouble sending: {:?}", result);
                         }
