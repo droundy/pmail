@@ -10,7 +10,6 @@ build = "build.rs"
 name = "relay"
 path = "rust/bin/relay.rs"
 
-
 [[bin]]
 name = "textmode-pmail"
 path = "rust/bin/textmode-pmail.rs"
@@ -24,7 +23,9 @@ serde_codegen = "0.5"
 syntex = "0.11"
 
 [dependencies]
+tiny_http = "0.4"
 rustbox = "0.7"
+rustc-serialize = "0.3"
 
 onionsalt = { version = "*", git = "https://github.com/droundy/onionsalt" }
 lazyfs = { version = "*", git = "https://github.com/droundy/lazyfs" }

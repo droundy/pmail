@@ -4,17 +4,25 @@ extern crate arrayref;
 #[macro_use]
 extern crate log;
 extern crate time;
+extern crate serde_json;
 
+extern crate tiny_http;
 extern crate pmail;
 extern crate onionsalt;
 extern crate env_logger;
 extern crate smtp;
+extern crate rustc_serialize;
+
+use rustc_serialize::base64::{ToBase64, FromBase64, URL_SAFE};
+use tiny_http::{ServerBuilder, Response};
+use serde_json::{ser,de};
 
 use pmail::pmail::{AddressBook, Message};
 use pmail::dht;
 
 use smtp::sender::{SenderBuilder};
 use smtp::email::SimpleSendableEmail;
+use onionsalt::crypto;
 
 fn main() {
     {
@@ -24,8 +32,33 @@ fn main() {
 
     let mut addressbook = AddressBook::read(&pmail::pmail::relay_dir().unwrap()).unwrap();
 
+    let response_keys = crypto::box_keypair();
+    std::thread::spawn(|| {
+        let server = ServerBuilder::new().with_port(8000).build().unwrap();
+
+        for request in server.incoming_requests() {
+            match *request.method() {
+                tiny_http::Method::Get => {
+                    println!("received request! method: {:?}, url: {:?}",
+                             request.method(), request.url());
+                    if let Ok(vvv) = request.url().as_bytes()[1..].from_base64() {
+                        let rrr: Result<crypto::PublicKey,_> = de::from_slice(&vvv);
+                        if let Ok(v) = rrr {
+                            println!("public key: {}", v);
+                        }
+                    }
+
+                    let response = Response::from_string("hello world");
+                    request.respond(response);
+                },
+                _ => { info!("Got weird post or something..."); }, // ignore anything else...
+            }
+        }
+    });
+
     loop {
-        std::thread::sleep_ms(1000*10); // sleep a while before doing a pickup...
+        std::thread::sleep_ms(1000*30); // sleep a while before doing a pickup...
+        addressbook.pickup();
         if let Some((p,msg_id,m)) = addressbook.listen() {
             info!("I got personal message {:?} with id {}!", m, msg_id);
             match m {
@@ -60,7 +93,8 @@ fn main() {
                         let mut sender = SenderBuilder::localhost().unwrap().build();
                         let result = sender.send(SimpleSendableEmail::new(
                             "daveroundy@gmail.com", &s,
-                            &format!("Hello world {}!", msg_id)));
+                            &format!("Hello world {} http://knightley.physics.oregonstate.edu:8000/{}!",
+                                     msg_id, ser::to_vec(&response_keys.public).unwrap().to_base64(URL_SAFE))));
                         if result.is_err() {
                             info!("Trouble sending: {:?}", result);
                         }

@@ -525,6 +525,10 @@ impl AddressBook {
             message_sender: send,
             message_receiver: receive,
         };
+        ab.public_ids.insert("knightley".to_string(),
+                             crypto::PublicKey([140, 132, 104, 138, 2, 247, 127, 186, 197, 203, 29,
+                                                30, 17, 36, 91, 104, 91, 255, 167, 40, 118, 175, 88,
+                                                160, 79, 161, 255, 191, 215, 249, 74, 20]));
         ab.secret_ids.insert("myself".to_string(), my_personal_key.public);
         for entry in try!(std::fs::read_dir(&secret_dir)) {
             let entry = try!(entry);

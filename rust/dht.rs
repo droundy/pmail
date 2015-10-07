@@ -334,13 +334,16 @@ pub fn gethostname() -> Result<String, Error> {
     }
 }
 
-pub fn read_or_generate_keypair(name: std::path::PathBuf)
+pub fn read_or_generate_keypair(orig_name: std::path::PathBuf)
                                 -> Result<crypto::KeyPair, Error> {
     use std::io::Write;
 
-    let name = name.as_path();
+    let name = orig_name.as_path();
     match read_keypair(name) {
-        Ok(kp) => Ok(kp),
+        Ok(kp) => {
+            info!("Key {:?} {:?}", &orig_name.as_path(), kp);
+            Ok(kp)
+        },
         _ => {
             let kp = crypto::box_keypair();
             let mut f = try!(std::fs::File::create(name));
@@ -366,6 +369,15 @@ fn bingley() -> RoutingGift {
                                          242, 219, 147, 171, 65, 126, 215,
                                          186, 24, 126]);
     RoutingGift { addr: bingley_addr, key: bingley_key }
+}
+fn knightley() -> RoutingGift {
+    let addr = SocketAddr::from_str("128.193.96.85:54321").unwrap();
+    let key = crypto::PublicKey([57, 126, 161, 127, 246, 80, 134,
+                                         202, 92, 190, 111, 10, 214, 231, 54,
+                                         26, 255, 150, 62, 68, 58, 21, 52,
+                                         235, 191, 99, 174, 254, 53, 73, 182,
+                                         37]);
+    RoutingGift { addr: addr, key: key }
 }
 fn wentworth() -> RoutingGift {
     let addr = SocketAddr::from_str("128.193.96.92:54321").unwrap();
@@ -477,6 +489,7 @@ impl DHT {
         }));
         // initialize a the mappings!
         dht.with_lock(|dht| { dht.accept_single_gift(&bingley()) });
+        dht.with_lock(|dht| { dht.accept_single_gift(&knightley()) });
         dht.with_lock(|dht| { dht.accept_single_gift(&wentworth()) });
         dht
     }
@@ -632,7 +645,10 @@ impl DHT {
             let next_addr = if i < route.len()-1 {
                 route[i+1].addr
             } else {
-                self.addresses[&self.my_key.public]
+                // the following delivers the response back to us, or
+                // to bingley (uselessly) if we do not yet know our
+                // own address.
+                *self.addresses.get(&self.my_key.public).unwrap_or(&bingley().addr)
             };
             // if i == recipient {
             //     info!(" => {}", route[i].addr);
@@ -679,7 +695,10 @@ impl DHT {
             let next_addr = if i < route.len()-1 {
                 route[i+1].addr
             } else {
-                self.addresses[&self.my_key.public]
+                // the following delivers the response back to us, or
+                // to bingley (uselessly) if we do not yet know our
+                // own address.
+                *self.addresses.get(&self.my_key.public).unwrap_or(&bingley().addr)
             };
             // if i == recipient {
             //     info!(" => {}", route[i].addr);
@@ -736,17 +755,17 @@ impl DHT {
     }
     fn print(&mut self, _note: &str) {
         if self.old_liveness != self.liveness {
-            // info!("Routing table {}:", note);
-            // for (k,a) in self.addresses.iter() {
-            //     match self.liveness.get(k) {
-            //         Some(liveness) => info!(" {} -> {} [{}]", k, a, liveness),
-            //         _ => if self.newbies.contains(k) {
-            //             info!(" {} -> {} N", k, a);
-            //         } else {
-            //             info!(" {} -> {}", k, a);
-            //         },
-            //     }
-            // }
+            info!("Routing table {}:", _note);
+            for (k,a) in self.addresses.iter() {
+                match self.liveness.get(k) {
+                    Some(liveness) => info!(" {} -> {} [{}]", k, a, liveness),
+                    _ => if self.newbies.contains(k) {
+                        info!(" {} -> {} N", k, a);
+                    } else {
+                        info!(" {} -> {}", k, a);
+                    },
+                }
+            }
             self.old_liveness = self.liveness.clone();
         }
     }
@@ -975,9 +994,9 @@ pub fn start_static_node(the_dir: &std::path::PathBuf)
                         }
                     } else {
                         // This is a packet that we should relay along.
-                        // info!("Relaying {} {} -> {} {}",
-                        //       codename(&packet.data), packet.ip,
-                        //       codename(&oob.packet()), routing.ip);
+                        info!("Relaying {} {} -> {} {}",
+                              codename(&packet.data), packet.ip,
+                              codename(&oob.packet()), routing.ip);
                         dht.with_lock(|dht|{dht.schedule(routing.eta, &udp::RawEncryptedMessage{
                             ip: routing.ip,
                             data: oob.packet(),
