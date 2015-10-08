@@ -109,7 +109,7 @@ pub enum Message {
 impl Message {
     fn needs_acknowledgement(&self) -> bool {
         match *self {
-            Message::Comment {..} | Message::ThreadSubject {..} | Message::ThreadSubject {..} => true,
+            Message::Comment {..} | Message::ThreadSubject {..} | Message::ThreadRecipients {..} => true,
             _ => false,
         }
     }
