@@ -109,7 +109,7 @@ pub enum Message {
 impl Message {
     fn needs_acknowledgement(&self) -> bool {
         match *self {
-            Message::Comment {..} | Message::ThreadSubject {..} | Message::ThreadRecipients {..} => true,
+            Message::Comment {..} | Message::ThreadSubject {..} | Message::ThreadSubject {..} => true,
             _ => false,
         }
     }
@@ -292,6 +292,7 @@ pub struct AddressBook {
     ask_rendezvous: SyncSender<crypto::PublicKey>,
     message_sender: Sender<EncryptedMessage>,
     message_receiver: Receiver<UserMessage>,
+    dir: std::path::PathBuf,
 }
 
 impl AddressBook {
@@ -371,12 +372,10 @@ impl AddressBook {
         use std::iter::FromIterator;
         Vec::from_iter(self.secret_ids.keys())
     }
-    fn public_secret_dirs() -> Result<(std::path::PathBuf, std::path::PathBuf), std::io::Error> {
-        let mut address_dir = match std::env::home_dir() {
-            Some(hd) => hd,
-            None => std::path::PathBuf::from("."),
-        };
-        address_dir.push(".pmail/addressbook");
+    fn public_secret_dirs(the_dir: &std::path::PathBuf)
+                          -> Result<(std::path::PathBuf, std::path::PathBuf), std::io::Error> {
+        let mut address_dir = the_dir.clone();
+        address_dir.push("addressbook");
         let address_dir = address_dir;
 
         let mut public_dir = address_dir.clone();
@@ -388,6 +387,7 @@ impl AddressBook {
         secret_dir.push("secret");
         let secret_dir = secret_dir;
         try!(std::fs::create_dir_all(&secret_dir));
+        info!("public and secret dirs: {:?} and {:?}", &public_dir, &secret_dir);
         Ok((public_dir, secret_dir))
     }
 
@@ -512,7 +512,7 @@ impl AddressBook {
             name.push("personal.key");
             dht::read_or_generate_keypair(name).unwrap()
         };
-        let (public_dir, secret_dir) = try!(AddressBook::public_secret_dirs());
+        let (public_dir, secret_dir) = try!(AddressBook::public_secret_dirs(the_dir));
         let (ask_rendezvous, hear_rendezvous, send, receive) = try!(dht::start_static_node(the_dir));
 
         let mut ab = AddressBook {
@@ -524,6 +524,7 @@ impl AddressBook {
             hear_rendezvous: hear_rendezvous,
             message_sender: send,
             message_receiver: receive,
+            dir: the_dir.clone(),
         };
         ab.public_ids.insert("knightley".to_string(),
                              crypto::PublicKey([140, 132, 104, 138, 2, 247, 127, 186, 197, 203, 29,
@@ -573,7 +574,7 @@ impl AddressBook {
     }
     pub fn write(&self) -> Result<(), std::io::Error> {
         use std::io::Write;
-        let (public_dir, secret_dir) = try!(AddressBook::public_secret_dirs());
+        let (public_dir, secret_dir) = try!(AddressBook::public_secret_dirs(&self.dir));
         for s in self.public_ids.keys() {
             let mut name = public_dir.clone();
             name.push(s);

@@ -755,17 +755,17 @@ impl DHT {
     }
     fn print(&mut self, _note: &str) {
         if self.old_liveness != self.liveness {
-            info!("Routing table {}:", _note);
-            for (k,a) in self.addresses.iter() {
-                match self.liveness.get(k) {
-                    Some(liveness) => info!(" {} -> {} [{}]", k, a, liveness),
-                    _ => if self.newbies.contains(k) {
-                        info!(" {} -> {} N", k, a);
-                    } else {
-                        info!(" {} -> {}", k, a);
-                    },
-                }
-            }
+        //     info!("Routing table {}:", _note);
+        //     for (k,a) in self.addresses.iter() {
+        //         match self.liveness.get(k) {
+        //             Some(liveness) => info!(" {} -> {} [{}]", k, a, liveness),
+        //             _ => if self.newbies.contains(k) {
+        //                 info!(" {} -> {} N", k, a);
+        //             } else {
+        //                 info!(" {} -> {}", k, a);
+        //             },
+        //         }
+        //     }
             self.old_liveness = self.liveness.clone();
         }
     }
@@ -954,7 +954,7 @@ pub fn start_static_node(the_dir: &std::path::PathBuf)
                                             dht.to_pickup.remove(&destination);
                                         },
                                         Message::ForwardPlease { destination, message } => {
-                                            info!("Forward request: {}", codename(&packet.data));
+                                            // info!("Forward request: {}", codename(&packet.data));
                                             let mut dht = dht.lock().unwrap();
                                             let ready_to_forward = dht.to_forward.contains_key(&destination);
                                             if ready_to_forward {
@@ -965,10 +965,10 @@ pub fn start_static_node(the_dir: &std::path::PathBuf)
                                                     let ref mut foob = dht.to_forward.get_mut(&destination).unwrap();
                                                     foob.respond(&my_key, &buffer);
                                                     let routing = RoutingInfo::from_bytes(&foob.routing());
-                                                    info!("Forwarding {} {} -> {} {}",
-                                                             codename(&destination.0), codename(&buffer),
-                                                             codename(&foob.packet()),
-                                                             routing.ip);
+                                                    // info!("Forwarding {} {} -> {} {}",
+                                                    //          codename(&destination.0), codename(&buffer),
+                                                    //          codename(&foob.packet()),
+                                                    //          routing.ip);
                                                     (routing, foob.packet())
                                                 };
                                                 dht.schedule(routing.eta,
@@ -978,7 +978,7 @@ pub fn start_static_node(the_dir: &std::path::PathBuf)
                                                              });
                                                 dht.to_forward.remove(&destination);
                                             } else {
-                                                info!("Saving message for pick up by {}!", codename(&destination.0));
+                                                // info!("Saving message for pick up by {}!", codename(&destination.0));
                                                 dht.to_pickup.insert(destination,
                                                                      Message::ForwardPlease{
                                                                          destination: destination,
@@ -994,9 +994,9 @@ pub fn start_static_node(the_dir: &std::path::PathBuf)
                         }
                     } else {
                         // This is a packet that we should relay along.
-                        info!("Relaying {} {} -> {} {}",
-                              codename(&packet.data), packet.ip,
-                              codename(&oob.packet()), routing.ip);
+                        // info!("Relaying {} {} -> {} {}",
+                        //       codename(&packet.data), packet.ip,
+                        //       codename(&oob.packet()), routing.ip);
                         dht.with_lock(|dht|{dht.schedule(routing.eta, &udp::RawEncryptedMessage{
                             ip: routing.ip,
                             data: oob.packet(),

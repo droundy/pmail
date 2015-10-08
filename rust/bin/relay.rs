@@ -22,19 +22,22 @@ use smtp::sender::{SenderBuilder};
 use smtp::email::SimpleSendableEmail;
 use onionsalt::crypto;
 
+use std::sync::{Arc,Mutex};
+
 fn main() {
     {
         use env_logger::init;
         init().unwrap();
     }
 
-    let mut addressbook = AddressBook::read(&pmail::pmail::relay_dir().unwrap()).unwrap();
+    let addressbook = Arc::new(Mutex::new(AddressBook::read(&pmail::pmail::relay_dir().unwrap()).unwrap()));
 
     let response_keys = crypto::box_keypair();
     let secret_key_for_http = response_keys.public.0;
+
+    let ab = addressbook.clone();
     std::thread::spawn(move|| {
         let server = ServerBuilder::new().with_port(8000).build().unwrap();
-
         for request in server.incoming_requests() {
             match *request.method() {
                 tiny_http::Method::Get => {
@@ -44,13 +47,16 @@ fn main() {
                         let n = crypto::Nonce(*array_ref![vvv, 0, 24]);
                         let mut decrypted = vec![0; vvv.len() - 8];
                         if crypto::secretbox_open(&mut decrypted, &vvv[8..], &n, &secret_key_for_http).is_ok() {
-                            let id = String::from_utf8_lossy(&decrypted[32..]).to_string();
-                            println!("confirmed identity: {}", id);
+                            let id = String::from_utf8_lossy(&decrypted[64..]).to_string();
+                            let k = crypto::PublicKey(*array_ref![decrypted,32,32]);
+                            println!("confirmed identity: {} with key {}", id, k);
+                            ab.lock().unwrap().assert_public_id(&id, &k);
+                            ab.lock().unwrap().write().unwrap();
+                            println!("we now know: {:?}", ab.lock().unwrap().list_public_keys());
                         } else {
                             println!("decryption failed!  :(");
                         }
                     }
-
                     let response = Response::from_string("hello world");
                     request.respond(response);
                 },
@@ -61,6 +67,7 @@ fn main() {
 
     loop {
         std::thread::sleep_ms(1000*30); // sleep a while before doing a pickup...
+        let mut addressbook = addressbook.lock().unwrap();
         addressbook.pickup();
         if let Some((p,msg_id,m)) = addressbook.listen() {
             info!("I got personal message {:?} with id {}!", m, msg_id);
@@ -95,11 +102,12 @@ fn main() {
                         info!("Nice comment! {}", s);
 
                         let mut sender = SenderBuilder::localhost().unwrap().build();
-                        let mut raw_cookie = vec![0; 32 + message_length];
+                        let mut raw_cookie = vec![0; 32 + 32 + message_length];
                         for i in 0 .. message_length {
-                            raw_cookie[32+i] = contents[i];
+                            raw_cookie[32+32+i] = contents[i];
                         }
-                        let mut cookie = vec![0; 40 + message_length];
+                        *array_mut_ref![raw_cookie,32,32] = p.0;
+                        let mut cookie = vec![0; 40 + 32 + message_length];
                         let n = crypto::random_nonce();
                         crypto::secretbox(&mut cookie[8..], &raw_cookie, &n, &response_keys.public.0);
                         *array_mut_ref![cookie, 0, 24] = n.0;

@@ -234,6 +234,7 @@ fn main() {
                                     user: Str255::from(editing.as_ref()),
                                 };
                                 if let Some(k) = addressbook.lookup(&e) {
+                                    info!("Actually sending query");
                                     addressbook.send(&k, &m);
                                 }
                             }

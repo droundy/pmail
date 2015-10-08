@@ -51,7 +51,7 @@ impl Mailbox {
                     let mut userdir = try!(self.user_dir(u));
                     userdir.push("threads");
                     let mut users: Vec<_> = self.threads_from_user(u).collect();
-                    info!("We already have {:?}", &users);
+                    // info!("We already have {:?}", &users);
                     let pos = users.iter().position(|x| { *x == thread });
                     if let Some(pos) = pos {
                         users.remove(pos);
