@@ -550,6 +550,23 @@ impl DHT {
         let r = crypto::random_nonce().0;
         r[0] as u32 + ((r[1] as u32)<<8) + ((r[2] as u32)<<16)
     }
+    fn pick_live_route(&mut self) -> Vec<RoutingGift> {
+        let len = self.liveness.len();
+        assert!(len > 2);
+        let mut out = Vec::new();
+        for _ in 0 .. 3 + (self.random_usize() % 4) {
+            let mut new_gift = self.random_live_gift();
+            if out.len() > 1 && (out.contains(&new_gift) || new_gift.key == self.my_key.public) {
+                // Let's not create a loop that loops back on itself.
+                return out;
+            }
+            while new_gift.key == self.my_key.public || out.contains(&new_gift) {
+                new_gift = self.random_live_gift();
+            }
+            out.push(new_gift);
+        }
+        out
+    }
     fn pick_route(&mut self) -> Vec<RoutingGift> {
         assert!(self.addresses.len() > 2);
         let mut out = Vec::new();
@@ -672,8 +689,11 @@ impl DHT {
     }
     fn send_ciphertext(&mut self, rendezvous: crypto::PublicKey,
                        ciphertext: [u8;PAYLOAD_LENGTH], total_delay_ms: u64)
-                       -> (SocketAddr, SentMsg) {
-        let mut route = self.pick_route();
+                       -> Option<(SocketAddr, SentMsg)> {
+        if self.liveness.len() < 3 {
+            return None;
+        }
+        let mut route = self.pick_live_route();
         let mut recipient = self.random_usize() % route.len();
         for i in 0 .. route.len() {
             if route[i].key == rendezvous {
@@ -717,7 +737,7 @@ impl DHT {
         ob.add_payload(self.my_key, &ciphertext);
         // info!("sending something: {} -> ... -> {}",
         //       codename(&ob.packet()), codename(&ob.return_magic()));
-        (route[0].addr, SentMsg { ob: ob, who_relayed: who_relayed })
+        Some((route[0].addr, SentMsg { ob: ob, who_relayed: who_relayed }))
     }
     fn whoami(&mut self, who: &RoutingGift) -> (SocketAddr, SentMsg) {
         let mut hello_payload = [0; PAYLOAD_LENGTH];
@@ -853,19 +873,20 @@ pub fn start_static_node(the_dir: &std::path::PathBuf)
         let dht = dht.clone();
         std::thread::spawn(move|| {
             for encrypted_message in receiver1.iter() {
-                while dht.with_lock(|dht|{dht.addresses.len() <= 2}) {
-                    std::thread::sleep_ms(1000); // wait and hope
-                }
                 dht.with_lock(|dht|{
-                    let (ip,sm) = dht.send_ciphertext(encrypted_message.rendezvous,
-                                                          encrypted_message.contents, 600);
-                    dht.schedule(60, &udp::RawEncryptedMessage{
-                        ip: ip,
-                        data: sm.ob.packet(),
-                    });
-                    // The following allows us to read the response
-                    // when it comes back!
-                    dht.onionboxen.insert(sm.ob.return_magic(), sm);
+                    if let Some((ip,sm)) = dht.send_ciphertext(encrypted_message.rendezvous,
+                                                               encrypted_message.contents, 600) {
+                        dht.schedule(60, &udp::RawEncryptedMessage{
+                            ip: ip,
+                            data: sm.ob.packet(),
+                        });
+                        // The following allows us to read the response
+                        // when it comes back!
+                        dht.onionboxen.insert(sm.ob.return_magic(), sm);
+                    } else {
+                        info!("Unready to send out message with {} live nodes",
+                              dht.liveness.len());
+                    }
                 });
             }
         });
