@@ -51,7 +51,7 @@ mod test {
     fn serialize() {
         let x = super::Id(crypto::box_keypair().public.0);
 
-        let mut f = tempfile::TempFile::new().unwrap();
+        let mut f = tempfile::tempfile().unwrap();
         serde_json::to_writer(&mut f, &x).unwrap();
 
         f.seek(std::io::SeekFrom::Start(0)).unwrap();
