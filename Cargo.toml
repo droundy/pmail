@@ -30,7 +30,7 @@ rustc-serialize = "0.3"
 onionsalt = { version = "*", git = "https://github.com/droundy/onionsalt" }
 lazyfs = { version = "*", git = "https://github.com/droundy/lazyfs" }
 arrayref = "0.3.0"
-tempfile = "1"
+tempfile = "2"
 smtp = "0.1"
 
 log = "0.3"
